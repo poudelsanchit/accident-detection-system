@@ -183,9 +183,6 @@ export const login = async (req: Request, res: Response) => {
       return res.status(401).json({ message: "Invalid phone number or password" });
     }
 
-    if (user.isVerified === false) {
-      return res.status(400).json({ message: "User is not verified" });
-    }
 
     if (!process.env.JWT_SECRET) {
       throw new Error("JWT_SECRET is not configured");

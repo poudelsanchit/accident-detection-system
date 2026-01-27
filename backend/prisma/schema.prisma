@@ -100,7 +100,6 @@ model Vehicle {
   id             String @id @default(uuid())
   vehicleNumber  String
   vehicleType    VehicleType
-  vehicleModel   String
 
   driverId       String
   organizationId String
