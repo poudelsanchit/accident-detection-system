@@ -42,6 +42,8 @@ interface Vehicle {
     id: string
     vehicleNumber: string
     vehicleType: string
+    ipAddress?: string | null
+    port?: number | null
     driver: {
         id: string
         phoneNumber: string
@@ -88,6 +90,8 @@ export default function OrganizationDetailPage() {
         vehicleNumber: "",
         vehicleType: "",
         driverId: "",
+        ipAddress: "",
+        port: 81,
     })
     const [drivers, setDrivers] = useState<Array<{ id: string; phoneNumber: string; fullName: string | null }>>([])
     const [activeTab, setActiveTab] = useState<"vehicles" | "settings">("vehicles")
@@ -275,6 +279,8 @@ export default function OrganizationDetailPage() {
                     vehicleNumber: "",
                     vehicleType: "",
                     driverId: "",
+                    ipAddress: "",
+                    port: 81,
                 })
                 fetchVehicles()
             } else {
@@ -489,6 +495,39 @@ export default function OrganizationDetailPage() {
                                 </Select>
                             </div>
                             <div className="space-y-2">
+                                <Label htmlFor="ipAddress">IP Address (Optional)</Label>
+                                <Input
+                                    id="ipAddress"
+                                    name="ipAddress"
+                                    type="text"
+                                    placeholder="e.g., 192.168.1.100"
+                                    value={formData.ipAddress}
+                                    onChange={handleInputChange}
+                                />
+                                <p className="text-xs text-muted-foreground">
+                                    Enter the IP address of the vehicle's tracking device
+                                </p>
+                            </div>
+                            <div className="space-y-2">
+                                <Label htmlFor="port">Port (Optional)</Label>
+                                <Input
+                                    id="port"
+                                    name="port"
+                                    type="number"
+                                    placeholder="e.g., 81"
+                                    value={formData.port}
+                                    onChange={(e) => {
+                                        const value = e.target.value === "" ? 81 : parseInt(e.target.value, 10)
+                                        setFormData({ ...formData, port: isNaN(value) ? 81 : value })
+                                    }}
+                                    min="1"
+                                    max="65535"
+                                />
+                                <p className="text-xs text-muted-foreground">
+                                    WebSocket port for the hardware device (default: 81)
+                                </p>
+                            </div>
+                            <div className="space-y-2">
                                 <Label htmlFor="driverId">Driver</Label>
                                 {drivers.length === 0 ? (
                                     <div className="p-3 border rounded-md bg-muted text-sm text-muted-foreground">
@@ -610,6 +649,14 @@ export default function OrganizationDetailPage() {
                                         {vehicle.driver.fullName || vehicle.driver.phoneNumber}
                                     </span>
                                 </div>
+                                {vehicle.ipAddress && (
+                                    <div className="flex items-center gap-2 text-sm">
+                                        <span className="text-muted-foreground">IP Address: </span>
+                                        <span className="font-mono font-medium text-xs">
+                                            {vehicle.ipAddress}:{vehicle.port || 81}
+                                        </span>
+                                    </div>
+                                )}
 
                                 {vehicle.accidents && vehicle.accidents.length > 0 && (
                                     <div className="pt-3 border-t">

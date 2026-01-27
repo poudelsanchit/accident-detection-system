@@ -3,6 +3,14 @@ import { useEffect, useRef, useState, useCallback } from "react"
 import { useSession } from "next-auth/react"
 import { useParams, useRouter } from "next/navigation"
 import { Button } from "@/core/components/ui/button"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/core/components/ui/select"
+import { Label } from "@/core/components/ui/label"
 import { ArrowLeft, Wifi, WifiOff, RefreshCw, Play, Square } from "lucide-react"
 import { toast } from "sonner"
 import dynamic from "next/dynamic"
@@ -23,6 +31,10 @@ const Marker = dynamic(
 )
 const Popup = dynamic(
   () => import("react-leaflet").then((mod) => mod.Popup),
+  { ssr: false }
+)
+const Polyline = dynamic(
+  () => import("react-leaflet").then((mod) => mod.Polyline),
   { ssr: false }
 )
 
@@ -54,6 +66,7 @@ interface VehicleData {
   gyroZ: number
   speed?: number
   timestamp: number
+  positionHistory?: Array<[number, number]> // [latitude, longitude] pairs
 }
 
 interface Organization {
@@ -66,6 +79,16 @@ interface DriverVehicle {
   id: string
   vehicleNumber: string
   vehicleType: string
+  ipAddress?: string | null
+  port?: number | null
+}
+
+interface AvailableVehicle {
+  id: string
+  vehicleNumber: string
+  vehicleType: string
+  ipAddress?: string | null
+  port?: number | null
 }
 
 import { MapUpdater } from "./MapUpdater"
@@ -83,11 +106,14 @@ export default function MapPage() {
   const [isConnecting, setIsConnecting] = useState(false)
   const [connectionStatus, setConnectionStatus] = useState<"disconnected" | "connecting" | "connected">("disconnected")
   const [driverVehicle, setDriverVehicle] = useState<DriverVehicle | null>(null)
+  const [availableVehicles, setAvailableVehicles] = useState<AvailableVehicle[]>([])
+  const [selectedVehicleId, setSelectedVehicleId] = useState<string>("")
   const [isSendingData, setIsSendingData] = useState(false)
   const [currentLocation, setCurrentLocation] = useState<{ lat: number; lon: number } | null>(null)
   const [mapReady, setMapReady] = useState(false)
   
-  const wsRef = useRef<WebSocket | null>(null)
+  const wsRef = useRef<WebSocket | null>(null) // Backend WebSocket
+  const hardwareWsRef = useRef<WebSocket | null>(null) // Hardware device WebSocket
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const reconnectAttemptsRef = useRef(0)
   const maxReconnectAttempts = 5
@@ -98,6 +124,12 @@ export default function MapPage() {
   const driverVehicleRef = useRef<DriverVehicle | null>(null)
   const isSendingDataRef = useRef(false)
   const mapInstanceRef = useRef<any>(null)
+  const vehicleDirectionRef = useRef<Map<string, { angle: number; baseLat: number; baseLon: number }>>(new Map())
+  
+  // Speed calculation refs (for hardware data)
+  const lastLatRef = useRef<number | null>(null)
+  const lastLonRef = useRef<number | null>(null)
+  const lastTimeRef = useRef<number | null>(null)
 
   // Fetch organization details
   const fetchOrganization = useCallback(async () => {
@@ -128,8 +160,8 @@ export default function MapPage() {
     }
   }, [session?.user?.accessToken, organizationId, router])
 
-  // Fetch driver's vehicle if user is a driver
-  const fetchDriverVehicle = useCallback(async () => {
+  // Fetch all vehicles for the organization (for driver to select)
+  const fetchAvailableVehicles = useCallback(async () => {
     if (!session?.user?.accessToken || !organizationId) return
 
     try {
@@ -144,24 +176,38 @@ export default function MapPage() {
 
       if (response.ok) {
         const data = await response.json()
-        // Find vehicle where current user is the driver
-        const myVehicle = data.vehicles?.find(
-          (v: any) => v.driver?.id === session?.user?.id
-        )
-        if (myVehicle) {
-          const vehicle = {
-            id: myVehicle.id,
-            vehicleNumber: myVehicle.vehicleNumber,
-            vehicleType: myVehicle.vehicleType,
+        const vehicles = data.vehicles?.map((v: any) => ({
+          id: v.id,
+          vehicleNumber: v.vehicleNumber,
+          vehicleType: v.vehicleType,
+          ipAddress: v.ipAddress,
+          port: v.port || 81, // Default to port 81 if not set
+        })) || []
+        setAvailableVehicles(vehicles)
+        
+        // If user is a driver, find their assigned vehicle and set it as default
+        if (organization?.myRole === "DRIVER") {
+          const myVehicle = data.vehicles?.find(
+            (v: any) => v.driver?.id === session?.user?.id
+          )
+          if (myVehicle) {
+            const vehicle = {
+              id: myVehicle.id,
+              vehicleNumber: myVehicle.vehicleNumber,
+              vehicleType: myVehicle.vehicleType,
+              ipAddress: myVehicle.ipAddress,
+              port: myVehicle.port || 81, // Include port, default to 81
+            }
+            driverVehicleRef.current = vehicle
+            setDriverVehicle(vehicle)
+            setSelectedVehicleId(myVehicle.id)
           }
-          driverVehicleRef.current = vehicle
-          setDriverVehicle(vehicle)
         }
       }
     } catch (error) {
-      console.error("Error fetching driver vehicle:", error)
+      console.error("Error fetching vehicles:", error)
     }
-  }, [session?.user?.accessToken, session?.user?.id, organizationId])
+  }, [session?.user?.accessToken, session?.user?.id, organizationId, organization?.myRole])
 
   // Connect to WebSocket
   const connectWebSocket = useCallback(() => {
@@ -206,14 +252,14 @@ export default function MapPage() {
           }))
           toast.success("Connected to live tracking")
         }
-        // Join as driver if user is a driver and has a vehicle
-        else if (organization && organization.myRole === "DRIVER" && driverVehicle) {
+        // Join as driver if user is a driver and has a selected vehicle
+        else if (organization && organization.myRole === "DRIVER" && driverVehicleRef.current) {
           ws.send(JSON.stringify({
             type: "join:driver",
             organizationId: organizationId,
             name: session?.user?.name || "Driver",
-            vechicleId: driverVehicle.id,
-            vehicleType: driverVehicle.vehicleType,
+            vechicleId: driverVehicleRef.current.id,
+            vehicleType: driverVehicleRef.current.vehicleType,
           }))
           toast.success("Connected as driver")
         }
@@ -231,25 +277,38 @@ export default function MapPage() {
           const data = JSON.parse(message)
           
           if (data.type === "driver:data" && data.data) {
-            const vehicleData: VehicleData = {
-              vehicleId: data.data.vehicleId,
-              vehicleNumber: data.data.vehicleNumber,
-              driverName: data.data.driverName,
-              vehicleType: data.data.vehicleType,
-              latitude: data.data.latitude,
-              longitude: data.data.longitude,
-              accelX: data.data.accelX,
-              accelY: data.data.accelY,
-              accelZ: data.data.accelZ,
-              gyroX: data.data.gyroX,
-              gyroY: data.data.gyroY,
-              gyroZ: data.data.gyroZ,
-              speed: data.data.speed,
-              timestamp: Date.now(),
-            }
-
             setVehicles((prev) => {
               const newMap = new Map(prev)
+              const existingVehicle = prev.get(data.data.vehicleId)
+              
+              // Get existing position history or create new array
+              const positionHistory = existingVehicle?.positionHistory || []
+              
+              // Add new position to history
+              const newPosition: [number, number] = [data.data.latitude, data.data.longitude]
+              const updatedHistory = [...positionHistory, newPosition]
+              
+              // Keep only last 10 positions
+              const trimmedHistory = updatedHistory.slice(-10)
+              
+              const vehicleData: VehicleData = {
+                vehicleId: data.data.vehicleId,
+                vehicleNumber: data.data.vehicleNumber,
+                driverName: data.data.driverName,
+                vehicleType: data.data.vehicleType,
+                latitude: data.data.latitude,
+                longitude: data.data.longitude,
+                accelX: data.data.accelX,
+                accelY: data.data.accelY,
+                accelZ: data.data.accelZ,
+                gyroX: data.data.gyroX,
+                gyroY: data.data.gyroY,
+                gyroZ: data.data.gyroZ,
+                speed: data.data.speed,
+                timestamp: Date.now(),
+                positionHistory: trimmedHistory,
+              }
+
               newMap.set(vehicleData.vehicleId, vehicleData)
               return newMap
             })
@@ -293,7 +352,7 @@ export default function MapPage() {
       setConnectionStatus("disconnected")
       toast.error("Failed to connect to WebSocket server")
     }
-  }, [organization, organizationId, session?.user?.name, driverVehicle])
+  }, [organization, organizationId, session?.user?.name])
 
   // Manual reconnect function
   const handleReconnect = () => {
@@ -341,139 +400,337 @@ export default function MapPage() {
     }
   }, [])
 
-  // Generate random location (simulating vehicle movement)
-  const generateRandomLocation = useCallback(() => {
-    // Start from Kathmandu, Nepal (27.7172, 85.3240) and move randomly
-    const baseLat = 27.7172
-    const baseLon = 85.3240
-    const radius = 0.01 // ~1km radius
-    
-    // Generate random offset
-    const angle = Math.random() * 2 * Math.PI
-    const distance = Math.random() * radius
-    
-    return {
-      lat: baseLat + distance * Math.cos(angle),
-      lon: baseLon + distance * Math.sin(angle),
+  // Calculate speed from GPS coordinates (Haversine formula)
+  const calculateSpeed = useCallback((lat: number, lon: number): number => {
+    const R = 6371000 // Earth radius in meters
+    const toRad = (d: number) => d * Math.PI / 180
+
+    if (lastLatRef.current === null || lastLonRef.current === null || lastTimeRef.current === null) {
+      lastLatRef.current = lat
+      lastLonRef.current = lon
+      lastTimeRef.current = Date.now()
+      return 0
     }
+
+    const dLat = toRad(lat - lastLatRef.current)
+    const dLon = toRad(lon - lastLonRef.current)
+    const a = Math.sin(dLat / 2) ** 2 +
+              Math.cos(toRad(lastLatRef.current)) * Math.cos(toRad(lat)) * Math.sin(dLon / 2) ** 2
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+    const dist = R * c // Distance in meters
+    const now = Date.now()
+    const timeDiff = (now - lastTimeRef.current) / 1000 // Time difference in seconds
+    const speed = timeDiff > 0 ? (dist / timeDiff) * 3.6 : 0 // Convert to km/h
+
+    lastLatRef.current = lat
+    lastLonRef.current = lon
+    lastTimeRef.current = now
+
+    return speed
   }, [])
-
-  // Send driver data periodically with mock data
-  const startSendingData = useCallback(() => {
-    if (isSendingDataRef.current) {
-      return // Already sending data
-    }
-
-    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
-      toast.error("WebSocket not connected")
-      return
-    }
-
-    if (!driverVehicleRef.current) {
-      toast.error("No vehicle assigned")
-      return
-    }
-
-    // Initialize with random starting location
-    let mockLocation = generateRandomLocation()
-    currentLocationRef.current = mockLocation
-    setCurrentLocation(mockLocation)
-
-    // Generate mock sensor data
-    const generateMockSensorData = () => {
-      return {
-        accelX: (Math.random() - 0.5) * 2, // -1 to 1 m/s²
-        accelY: (Math.random() - 0.5) * 2,
-        accelZ: (Math.random() - 0.5) * 2 + 9.8, // Gravity + noise
-        gyroX: (Math.random() - 0.5) * 50, // -25 to 25 deg/s
-        gyroY: (Math.random() - 0.5) * 50,
-        gyroZ: (Math.random() - 0.5) * 50,
-      }
-    }
-
-    const sendData = () => {
-      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
-        return
-      }
-
-      const vehicle = driverVehicleRef.current
-      if (!vehicle) {
-        return
-      }
-
-      // Update location slightly to simulate movement
-      const currentLoc = currentLocationRef.current || generateRandomLocation()
-      const newLocation = {
-        lat: currentLoc.lat + (Math.random() - 0.5) * 0.0001, // Small movement
-        lon: currentLoc.lon + (Math.random() - 0.5) * 0.0001,
-      }
-      currentLocationRef.current = newLocation
-      setCurrentLocation(newLocation)
-
-      const sensorData = generateMockSensorData()
-      
-      const dataToSend = {
-        type: "driver:data",
-        organizationId: organizationId,
-        data: {
-          vehicleId: vehicle.id,
-          vehicleNumber: vehicle.vehicleNumber,
-          driverName: session?.user?.name || "Driver",
-          vehicleType: vehicle.vehicleType,
-          latitude: newLocation.lat,
-          longitude: newLocation.lon,
-          ...sensorData,
-        },
-      }
-
-      // Update driver's own vehicle marker on their map immediately
-      // Only update if location is valid
-      if (!isNaN(newLocation.lat) && !isNaN(newLocation.lon)) {
-        const vehicleData: VehicleData = {
-          vehicleId: vehicle.id,
-          vehicleNumber: vehicle.vehicleNumber,
-          driverName: session?.user?.name || "Driver",
-          vehicleType: vehicle.vehicleType,
-          latitude: newLocation.lat,
-          longitude: newLocation.lon,
-          accelX: sensorData.accelX,
-          accelY: sensorData.accelY,
-          accelZ: sensorData.accelZ,
-          gyroX: sensorData.gyroX,
-          gyroY: sensorData.gyroY,
-          gyroZ: sensorData.gyroZ,
-          timestamp: Date.now(),
-        }
-
-        // Update the vehicles map state to show driver's own position
-        setVehicles((prev) => {
-          const newMap = new Map(prev)
-          newMap.set(vehicleData.vehicleId, vehicleData)
-          return newMap
-        })
-      }
-
-      wsRef.current.send(JSON.stringify(dataToSend))
-      console.log("📤 Sending driver data:", dataToSend.data)
-    }
-
-    // Send data every second
-    dataIntervalRef.current = setInterval(sendData, 1000)
-    isSendingDataRef.current = true
-    setIsSendingData(true)
-    toast.success("Started sending vehicle data")
-  }, [organizationId, session?.user?.name, generateRandomLocation])
 
   // Stop sending data
   const stopSendingData = useCallback(() => {
+    // Close hardware WebSocket connection
+    if (hardwareWsRef.current) {
+      hardwareWsRef.current.close()
+      hardwareWsRef.current = null
+    }
+    
+    // Clear the data sending interval
     if (dataIntervalRef.current) {
       clearInterval(dataIntervalRef.current)
       dataIntervalRef.current = null
     }
+    
+    // Stop location tracking
+    if (locationWatchIdRef.current !== null) {
+      navigator.geolocation.clearWatch(locationWatchIdRef.current)
+      locationWatchIdRef.current = null
+    }
+    
+    // Clear vehicle direction tracking and remove vehicle from map
+    if (driverVehicleRef.current) {
+      const vehicleId = driverVehicleRef.current.id
+      vehicleDirectionRef.current.delete(vehicleId)
+      
+      // Remove vehicle from map display
+      setVehicles((prev) => {
+        const newMap = new Map(prev)
+        newMap.delete(vehicleId)
+        return newMap
+      })
+    }
+    
+    // Reset speed calculation refs
+    lastLatRef.current = null
+    lastLonRef.current = null
+    lastTimeRef.current = null
+    
+    // Reset state
     isSendingDataRef.current = false
     setIsSendingData(false)
+    currentLocationRef.current = null
+    setCurrentLocation(null)
+    
     toast.info("Stopped sending vehicle data")
   }, [])
+
+  // Send driver data periodically with mock data
+  const startSendingData = useCallback(() => {
+    // If already sending data for a different vehicle, stop it first
+    if (isSendingDataRef.current && driverVehicleRef.current) {
+      const currentVehicleId = driverVehicleRef.current.id
+      if (currentVehicleId !== selectedVehicleId) {
+        // Different vehicle selected, stop current one first
+        stopSendingData()
+        // Wait a bit before starting new vehicle
+        setTimeout(() => {
+          startSendingData()
+        }, 500)
+        return
+      } else {
+        // Same vehicle, already sending
+        return
+      }
+    }
+
+    if (!selectedVehicleId) {
+      toast.error("Please select a vehicle first")
+      return
+    }
+
+    // Find selected vehicle from available vehicles
+    const selectedVehicle = availableVehicles.find(v => v.id === selectedVehicleId)
+    if (!selectedVehicle) {
+      toast.error("Selected vehicle not found")
+      return
+    }
+
+    // Clean up previous vehicle if switching (safety check)
+    if (driverVehicleRef.current && driverVehicleRef.current.id !== selectedVehicle.id) {
+      // Remove previous vehicle from map
+      setVehicles((prev) => {
+        const newMap = new Map(prev)
+        newMap.delete(driverVehicleRef.current!.id)
+        return newMap
+      })
+      // Clear previous vehicle direction
+      vehicleDirectionRef.current.delete(driverVehicleRef.current.id)
+    }
+
+    // Update driverVehicleRef with selected vehicle (including IP address and port)
+    const vehicle = {
+      id: selectedVehicle.id,
+      vehicleNumber: selectedVehicle.vehicleNumber,
+      vehicleType: selectedVehicle.vehicleType,
+      ipAddress: selectedVehicle.ipAddress,
+      port: selectedVehicle.port || 81, // Use port from database or default to 81
+    }
+    driverVehicleRef.current = vehicle
+    setDriverVehicle(vehicle)
+
+    // Check if vehicle has IP address
+    if (!selectedVehicle.ipAddress || selectedVehicle.ipAddress.trim() === "") {
+      toast.error("Vehicle IP address not configured. Please add IP address in vehicle settings.")
+      return
+    }
+
+    // Ensure backend WebSocket is connected before starting
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+      toast.info("Connecting to server...")
+      connectWebSocket()
+      
+      // Wait for connection, then start sending
+      const checkConnection = setInterval(() => {
+        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+          clearInterval(checkConnection)
+          // Retry starting after connection is established
+          setTimeout(() => startSendingData(), 500)
+        }
+      }, 100)
+      
+      // Timeout after 5 seconds
+      setTimeout(() => {
+        clearInterval(checkConnection)
+        if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+          toast.error("Failed to connect to backend. Please try again.")
+        }
+      }, 5000)
+      
+      return
+    }
+    
+    // Join as driver with selected vehicle on backend WebSocket
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({
+        type: "join:driver",
+        organizationId: organizationId,
+        name: session?.user?.name || "Driver",
+        vechicleId: vehicle.id,
+        vehicleType: vehicle.vehicleType,
+      }))
+    }
+
+    // Connect to hardware device WebSocket using IP and port from database
+    // Simple pattern like HTML - just create WebSocket directly
+    const vehiclePort = selectedVehicle.port || 81 // Use port from database or default to 81
+    const hardwareWsUrl = `ws://${selectedVehicle.ipAddress}:${vehiclePort}`
+    console.log(`Connecting to hardware device at ${hardwareWsUrl}`)
+    
+    try {
+      // Simple WebSocket creation like in HTML
+      const hardwareWs = new WebSocket(hardwareWsUrl)
+      hardwareWsRef.current = hardwareWs
+
+      hardwareWs.onopen = () => {
+        console.log("Hardware WebSocket connected successfully")
+        toast.success(`Connected to vehicle device at ${selectedVehicle.ipAddress}:${vehiclePort}`)
+        isSendingDataRef.current = true
+        setIsSendingData(true)
+      }
+
+      // Simple message handler like in HTML - parse JSON and use data directly
+      hardwareWs.onmessage = (event) => {
+        try {
+          // Parse incoming data from hardware device (matching HTML pattern)
+          const d = JSON.parse(event.data)
+          
+          // Extract data fields (matching HTML file format exactly)
+          const lat = parseFloat(d.lat)
+          const lon = parseFloat(d.lon)
+          const accelX = parseFloat(d.accelX) || 0
+          const accelY = parseFloat(d.accelY) || 0
+          const accelZ = parseFloat(d.accelZ) || 0
+          const gyroX = parseFloat(d.gyroX) || 0
+          const gyroY = parseFloat(d.gyroY) || 0
+          const gyroZ = parseFloat(d.gyroZ) || 0
+          const accelMagnitude = parseFloat(d.accelMagnitude) || 0
+
+          // Validate GPS coordinates
+          if (isNaN(lat) || isNaN(lon)) {
+            console.warn("Invalid GPS coordinates received:", d)
+            return
+          }
+
+          // Calculate speed from GPS coordinates
+          const speed = calculateSpeed(lat, lon)
+
+          // Update current location
+          currentLocationRef.current = { lat, lon }
+          setCurrentLocation({ lat, lon })
+
+          // Forward data to backend WebSocket
+          if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN && driverVehicleRef.current) {
+            const dataToSend = {
+              type: "driver:data",
+              organizationId: organizationId,
+              data: {
+                vehicleId: driverVehicleRef.current.id,
+                vehicleNumber: driverVehicleRef.current.vehicleNumber,
+                driverName: session?.user?.name || "Driver",
+                vehicleType: driverVehicleRef.current.vehicleType,
+                latitude: lat,
+                longitude: lon,
+                accelX: accelX,
+                accelY: accelY,
+                accelZ: accelZ,
+                gyroX: gyroX,
+                gyroY: gyroY,
+                gyroZ: gyroZ,
+                speed: speed,
+              },
+            }
+
+            wsRef.current.send(JSON.stringify(dataToSend))
+            console.log("📤 Forwarding hardware data to backend:", dataToSend.data)
+
+            // Update driver's own vehicle marker on their map immediately
+            setVehicles((prev) => {
+              const newMap = new Map(prev)
+              const existingVehicle = prev.get(driverVehicleRef.current!.id)
+              
+              // Get existing position history or create new array
+              const positionHistory = existingVehicle?.positionHistory || []
+              
+              // Add new position to history
+              const newPosition: [number, number] = [lat, lon]
+              const updatedHistory = [...positionHistory, newPosition]
+              
+              // Keep only last 10 positions
+              const trimmedHistory = updatedHistory.slice(-10)
+              
+              const vehicleData: VehicleData = {
+                vehicleId: driverVehicleRef.current!.id,
+                vehicleNumber: driverVehicleRef.current!.vehicleNumber,
+                driverName: session?.user?.name || "Driver",
+                vehicleType: driverVehicleRef.current!.vehicleType,
+                latitude: lat,
+                longitude: lon,
+                accelX: accelX,
+                accelY: accelY,
+                accelZ: accelZ,
+                gyroX: gyroX,
+                gyroY: gyroY,
+                gyroZ: gyroZ,
+                speed: speed,
+                timestamp: Date.now(),
+                positionHistory: trimmedHistory,
+              }
+
+              newMap.set(vehicleData.vehicleId, vehicleData)
+              return newMap
+            })
+          }
+        } catch (error) {
+          console.error("Error parsing hardware data:", error)
+        }
+      }
+
+      // WebSocket error handler - errors are usually handled by onclose
+      hardwareWs.onerror = () => {
+        console.error(`WebSocket error occurred for ${hardwareWsUrl}`)
+        console.error("Note: WebSocket errors are usually handled by onclose event")
+        // Don't update state here - let onclose handle it
+      }
+
+      hardwareWs.onclose = (event) => {
+        console.log("Hardware WebSocket closed", {
+          code: event.code,
+          reason: event.reason,
+          wasClean: event.wasClean,
+          url: hardwareWsUrl
+        })
+        
+        hardwareWsRef.current = null
+        
+        if (isSendingDataRef.current) {
+          if (event.code === 1006) {
+            // Abnormal closure - connection failed
+            console.error("Connection failed: Abnormal closure (1006)")
+            console.error("Possible causes:")
+            console.error("1. Device is not reachable on the network")
+            console.error("2. WebSocket server is not running on the device")
+            console.error("3. Firewall is blocking the connection")
+            console.error("4. Device IP address is incorrect")
+            toast.error(`Connection to ${selectedVehicle.ipAddress}:${vehiclePort} failed. Check network connectivity and device status.`)
+          } else if (event.code === 1000) {
+            // Normal closure
+            console.log("Connection closed normally")
+            toast.info("Connection to vehicle device closed")
+          } else {
+            console.error(`Connection closed with code: ${event.code}, reason: ${event.reason || 'none'}`)
+            toast.warning("Connection to vehicle device lost")
+          }
+          stopSendingData()
+        }
+      }
+    } catch (error) {
+      console.error("Error connecting to hardware device:", error)
+      toast.error(`Failed to connect to vehicle device: ${error}`)
+      stopSendingData()
+    }
+  }, [organizationId, session?.user?.name, connectWebSocket, selectedVehicleId, availableVehicles, stopSendingData, calculateSpeed])
 
   useEffect(() => {
     if (session?.user?.accessToken) {
@@ -481,35 +738,56 @@ export default function MapPage() {
     }
   }, [session?.user?.accessToken, fetchOrganization])
 
-  // Fetch driver vehicle if user is a driver
+  // Fetch available vehicles for driver to select
   useEffect(() => {
     if (organization && organization.myRole === "DRIVER" && session?.user?.accessToken) {
-      fetchDriverVehicle()
+      fetchAvailableVehicles()
     }
-  }, [organization, session?.user?.accessToken, fetchDriverVehicle])
+  }, [organization, session?.user?.accessToken, fetchAvailableVehicles])
 
-  // Reconnect WebSocket when driver vehicle is fetched
+  // Reconnect WebSocket when driver selects a vehicle
   useEffect(() => {
-    if (organization?.myRole === "DRIVER" && driverVehicle && wsRef.current?.readyState === WebSocket.OPEN) {
-      // Send join:driver message if already connected
-      wsRef.current.send(JSON.stringify({
-        type: "join:driver",
-        organizationId: organizationId,
-        name: session?.user?.name || "Driver",
-        vechicleId: driverVehicle.id,
-        vehicleType: driverVehicle.vehicleType,
-      }))
-      toast.success("Connected as driver")
-    } else if (organization?.myRole === "DRIVER" && driverVehicle && (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN)) {
-      // Connect if not connected
-      connectWebSocket()
+    if (organization?.myRole === "DRIVER" && selectedVehicleId && driverVehicleRef.current) {
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        // Send join:driver message if already connected
+        wsRef.current.send(JSON.stringify({
+          type: "join:driver",
+          organizationId: organizationId,
+          name: session?.user?.name || "Driver",
+          vechicleId: driverVehicleRef.current.id,
+          vehicleType: driverVehicleRef.current.vehicleType,
+        }))
+      } else if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+        // Connect if not connected (will join when connected)
+        connectWebSocket()
+      }
     }
-  }, [driverVehicle, organization, organizationId, session?.user?.name, connectWebSocket])
+  }, [selectedVehicleId, organization, organizationId, session?.user?.name, connectWebSocket])
 
   useEffect(() => {
     if (organization) {
       // Connect WebSocket for all roles
-      connectWebSocket()
+      // For drivers, wait a bit for vehicle to be fetched
+      if (organization.myRole === "DRIVER") {
+        // Wait a bit for vehicle to be fetched before connecting
+        const timeoutId = setTimeout(() => {
+          connectWebSocket()
+        }, 500)
+        return () => {
+          clearTimeout(timeoutId)
+          if (reconnectTimeoutRef.current) {
+            clearTimeout(reconnectTimeoutRef.current)
+          }
+          if (wsRef.current) {
+            wsRef.current.close()
+            wsRef.current = null
+          }
+          stopLocationTracking()
+          stopSendingData()
+        }
+      } else {
+        connectWebSocket()
+      }
     }
 
     return () => {
@@ -580,11 +858,6 @@ export default function MapPage() {
                 ? "Share your location and vehicle data" 
                 : "Real-time vehicle tracking"}
             </p>
-            {organization.myRole === "DRIVER" && driverVehicle && (
-              <p className="text-xs text-muted-foreground mt-1">
-                Vehicle: {driverVehicle.vehicleNumber} ({driverVehicle.vehicleType})
-              </p>
-            )}
           </div>
         </div>
         
@@ -614,13 +887,74 @@ export default function MapPage() {
               Reconnect
             </Button>
           )}
-          {organization.myRole === "DRIVER" && driverVehicle && (
-            <div className="flex items-center gap-2">
-              {isSendingData ? (
+          {organization.myRole === "DRIVER" && (
+            <div className="flex items-center gap-3 relative z-50">
+              {!isSendingData ? (
+                <>
+                  <div className="flex items-center gap-2 relative z-50">
+                    <Label htmlFor="vehicle-select" className="text-sm whitespace-nowrap">
+                      Select Vehicle:
+                    </Label>
+                    <Select
+                      value={selectedVehicleId}
+                      onValueChange={(newVehicleId) => {
+                        // If currently sending data, stop it first before switching
+                        if (isSendingData && driverVehicleRef.current) {
+                          stopSendingData()
+                          // Wait for cleanup before switching
+                          setTimeout(() => {
+                            setSelectedVehicleId(newVehicleId)
+                          }, 300)
+                        } else {
+                          // Clean up previous vehicle from map if switching
+                          if (driverVehicleRef.current && driverVehicleRef.current.id !== newVehicleId) {
+                            setVehicles((prev) => {
+                              const newMap = new Map(prev)
+                              newMap.delete(driverVehicleRef.current!.id)
+                              return newMap
+                            })
+                            vehicleDirectionRef.current.delete(driverVehicleRef.current.id)
+                          }
+                          setSelectedVehicleId(newVehicleId)
+                        }
+                      }}
+                      disabled={isSendingData}
+                    >
+                      <SelectTrigger id="vehicle-select" className="w-[200px]">
+                        <SelectValue placeholder="Choose a vehicle" />
+                      </SelectTrigger>
+                      <SelectContent className="z-[9999]">
+                        {availableVehicles.length === 0 ? (
+                          <SelectItem value="no-vehicles" disabled>
+                            No vehicles available
+                          </SelectItem>
+                        ) : (
+                          availableVehicles.map((vehicle) => (
+                            <SelectItem key={vehicle.id} value={vehicle.id}>
+                              {vehicle.vehicleNumber} ({vehicle.vehicleType})
+                            </SelectItem>
+                          ))
+                        )}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <Button 
+                    onClick={startSendingData} 
+                    variant="default" 
+                    size="sm"
+                    disabled={!isConnected || !selectedVehicleId}
+                  >
+                    <Play className="h-4 w-4 mr-2" />
+                    Start Sending Data
+                  </Button>
+                </>
+              ) : (
                 <>
                   <div className="flex items-center gap-2 px-3 py-1 bg-green-100 dark:bg-green-900 rounded-md">
                     <div className="h-2 w-2 bg-green-500 rounded-full animate-pulse"></div>
-                    <span className="text-sm text-green-700 dark:text-green-300">Sending data...</span>
+                    <span className="text-sm text-green-700 dark:text-green-300">
+                      Sending data for {driverVehicle?.vehicleNumber || "vehicle"}...
+                    </span>
                   </div>
                   <Button 
                     onClick={stopSendingData} 
@@ -631,37 +965,20 @@ export default function MapPage() {
                     Stop
                   </Button>
                 </>
-              ) : (
-                <Button 
-                  onClick={startSendingData} 
-                  variant="default" 
-                  size="sm"
-                  disabled={!isConnected}
-                >
-                  <Play className="h-4 w-4 mr-2" />
-                  Start Sending Data
-                </Button>
               )}
-            </div>
-          )}
-          {organization.myRole === "DRIVER" && !driverVehicle && (
-            <div className="px-3 py-1 bg-yellow-100 dark:bg-yellow-900 rounded-md">
-              <span className="text-sm text-yellow-700 dark:text-yellow-300">
-                No vehicle assigned
-              </span>
             </div>
           )}
         </div>
       </div>
 
       {/* Map Container */}
-      <div className="flex-1 relative">
+      <div className="flex-1 relative z-0">
         {typeof window !== "undefined" && (
           <MapContainer
             key={`map-${organizationId}`}
             center={[27.7172, 85.3240]} // Default to Kathmandu, Nepal
             zoom={13}
-            style={{ height: "100%", width: "100%" }}
+            style={{ height: "100%", width: "100%", zIndex: 0 }}
             whenReady={() => {
               console.log("Map is ready")
               setMapReady(true)
@@ -682,6 +999,28 @@ export default function MapPage() {
                 url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
               />
             )}
+
+            {/* Vehicle Trails - Draw path lines */}
+            {mapReady && Array.from(vehicles.values())
+              .filter((vehicle) => 
+                vehicle.positionHistory && 
+                vehicle.positionHistory.length >= 2
+              )
+              .map((vehicle) => {
+                if (!vehicle.positionHistory) return null
+                
+                return (
+                  <Polyline
+                    key={`trail-${vehicle.vehicleId}`}
+                    positions={vehicle.positionHistory}
+                    color="#2563eb" // Blue color for all trails
+                    weight={5} // Thicker line for better visibility
+                    opacity={0.9} // More opaque for better visibility
+                    dashArray="8, 4" // Longer dashes for better visibility
+                  />
+                )
+              })
+              .filter(Boolean)}
 
             {/* Vehicle Markers - Only render when map is ready */}
             {mapReady && Array.from(vehicles.values())

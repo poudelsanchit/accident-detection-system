@@ -14,5 +14,6 @@ export const createVehicleSchema = z.object({
         return ipRegex.test(val)
     }, {
         message: "Invalid IP address format"
-    })
+    }),
+    port: z.number().int().min(1).max(65535).optional()
 })

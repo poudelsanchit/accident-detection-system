@@ -102,6 +102,7 @@ model Vehicle {
   vehicleType    VehicleType
   vehicleModel   String @default("")
   ipAddress      String?
+  port           Int?    @default(81)
 
   driverId       String
   organizationId String

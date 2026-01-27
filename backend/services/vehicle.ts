@@ -14,7 +14,7 @@ export const createVehicle = async (req: Request, res: Response) => {
             })
         }
 
-        const {vehicleNumber, vehicleType, driverId, organizationId, ipAddress} = validationResult.data
+        const {vehicleNumber, vehicleType, driverId, organizationId, ipAddress, port} = validationResult.data
         
         // Verify driver exists
         const driver = await prisma.user.findUnique({
@@ -59,7 +59,8 @@ export const createVehicle = async (req: Request, res: Response) => {
                 vehicleType,
                 driverId,
                 organizationId,
-                ipAddress: ipAddress || null
+                ipAddress: ipAddress || null,
+                port: port || 81 // Default to port 81 if not provided
             },
             include:{
                 driver: {

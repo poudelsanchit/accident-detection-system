@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Vehicle Real-Time Dashboard</title>
+
+<!-- Leaflet -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
+
+<!-- Chart.js -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.3.0/chart.umd.min.js"></script>
+
+<!-- Leaflet JS -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+   z 
+<style>
+body { margin:0; font-family:Arial; background:#f4f6f8; }
+header { background:#2c3e50; color:white; padding:0.6rem; text-align:center; }
+header h1 { margin:0; font-size:1.2rem; }
+
+.container {
+  padding:0.8rem;
+  display:grid;
+  grid-template-columns:repeat(2,1fr);
+  gap:0.8rem;
+}
+
+.card {
+  background:white;
+  border-radius:8px;
+  padding:0.6rem;
+  box-shadow:0 2px 6px rgba(0,0,0,0.1);
+}
+
+.card h2 { margin:0 0 0.4rem 0; font-size:1rem; }
+p { margin:0.3rem 0; font-size:0.85rem; }
+
+canvas { width:100%!important; height:160px!important; }
+
+#map { height:260px; border-radius:8px; }
+
+.alert { color:red; font-weight:bold; font-size:0.9rem; }
+
+.map-card { grid-column:1/-1; }
+
+@media(max-width:768px){
+  .container{ grid-template-columns:1fr; }
+  #map{ height:220px; }
+}
+</style>
+</head>
+
+<body>
+
+<header>
+  <h1>🚗 Vehicle Monitoring Dashboard</h1>
+</header>
+
+<div class="container">
+
+  <!-- Live Data -->
+  <div class="card">
+    <h2>Live Data</h2>
+    <p id="accel">Accel: X 0 | Y 0 | Z 0</p>
+    <p id="gyro">Gyro: X 0 | Y 0 | Z 0</p>
+    <p id="gps">GPS: Lat 28.1442 | Lon 84.0839</p>
+    <p id="speed">Speed: 0 km/h</p>
+    <p id="alert" class="alert"></p>
+  </div>
+
+  <div class="card"><h2>Acceleration</h2><canvas id="accelChart"></canvas></div>
+  <div class="card"><h2>Gyroscope</h2><canvas id="gyroChart"></canvas></div>
+  <div class="card"><h2>GPS (Lat/Lon)</h2><canvas id="gpsChart"></canvas></div>
+  <div class="card"><h2>Speed (km/h)</h2><canvas id="speedChart"></canvas></div>
+
+  <div class="card map-card">
+    <h2>Vehicle Route</h2>
+    <div id="map"></div>
+  </div>
+
+</div>
+
+<script>
+/* WebSocket */
+const ws = new WebSocket("ws://192.168.1.195:81");
+
+
+/* Charts */
+const makeChart = (id, labels, colors) =>
+  new Chart(document.getElementById(id), {
+    type:'line',
+    data:{ labels:[], datasets: labels.map((l,i)=>({label:l,data:[],borderColor:colors[i],tension:0.3})) },
+    options:{ animation:false }
+  });
+
+const accelChart = makeChart("accelChart",["X","Y","Z"],["red","green","blue"]);
+const gyroChart  = makeChart("gyroChart", ["X","Y","Z"],["orange","purple","brown"]);
+const gpsChart   = makeChart("gpsChart",  ["Latitude","Longitude"],["teal","black"]);
+const speedChart = makeChart("speedChart",["Speed (km/h)"],["crimson"]);
+
+/* Map */
+const defaultLat = 28.1442, defaultLon = 84.0839;
+const map = L.map('map').setView([defaultLat, defaultLon], 16);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+
+const marker = L.marker([defaultLat, defaultLon]).addTo(map);
+const routeLine = L.polyline([], { color:'blue', weight:4 }).addTo(map);
+let route = [];
+
+/* Speed calculation */
+let lastLat=null, lastLon=null, lastTime=null;
+const R = 6371000;
+const toRad = d => d * Math.PI / 180;
+
+function calcSpeed(lat, lon) {
+  if(lastLat===null) {
+    lastLat=lat; lastLon=lon; lastTime=Date.now();
+    return 0;
+  }
+  const dLat = toRad(lat-lastLat);
+  const dLon = toRad(lon-lastLon);
+  const a = Math.sin(dLat/2)**2 +
+            Math.cos(toRad(lastLat))*Math.cos(toRad(lat))*Math.sin(dLon/2)**2;
+  const c = 2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
+  const dist = R*c;
+  const now = Date.now();
+  const speed = (dist/((now-lastTime)/1000))*3.6;
+  lastLat=lat; lastLon=lon; lastTime=now;
+  return speed;
+}
+
+/* Data Handling */
+ws.onmessage = e => {
+  const d = JSON.parse(e.data);
+  const t = new Date().toLocaleTimeString();
+  const MAX = 40;
+
+  const speed = calcSpeed(d.lat, d.lon);
+
+  document.getElementById('accel').textContent=`Accel: X ${d.accelX} | Y ${d.accelY} | Z ${d.accelZ}`;
+  document.getElementById('gyro').textContent=`Gyro: X ${d.gyroX} | Y ${d.gyroY} | Z ${d.gyroZ}`;
+  document.getElementById('gps').textContent=`GPS: Lat ${d.lat} | Lon ${d.lon}`;
+  document.getElementById('speed').textContent=`Speed: ${speed.toFixed(2)} km/h`;
+  document.getElementById('alert').textContent=d.accelMagnitude>15?"🚨 ACCIDENT DETECTED!":"";
+
+  [accelChart,gyroChart,gpsChart,speedChart].forEach(c=>{
+    if(c.data.labels.length>=MAX){
+      c.data.labels.shift();
+      c.data.datasets.forEach(ds=>ds.data.shift());
+    }
+    c.data.labels.push(t);
+  });
+
+  accelChart.data.datasets[0].data.push(+d.accelX);
+  accelChart.data.datasets[1].data.push(+d.accelY);
+  accelChart.data.datasets[2].data.push(+d.accelZ);
+
+  gyroChart.data.datasets[0].data.push(+d.gyroX);
+  gyroChart.data.datasets[1].data.push(+d.gyroY);
+  gyroChart.data.datasets[2].data.push(+d.gyroZ);
+
+  gpsChart.data.datasets[0].data.push(+d.lat);
+  gpsChart.data.datasets[1].data.push(+d.lon);
+
+  speedChart.data.datasets[0].data.push(speed);
+
+  accelChart.update('none');
+  gyroChart.update('none');
+  gpsChart.update('none');
+  speedChart.update('none');
+
+  route.push([d.lat, d.lon]);
+  routeLine.setLatLngs(route);
+  marker.setLatLng([d.lat, d.lon]);
+  map.panTo([d.lat, d.lon]);
+};
+</script>
+
+</body>
+</html>
