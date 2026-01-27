@@ -173,11 +173,9 @@ export const login = async (req: Request, res: Response) => {
     if (!user) {
       return res.status(401).json({ message: "Invalid phone number or password" });
     }
-
-    // Check if user is verified
-    if (!user.isVerified) {
-      return res.status(403).json({ message: "Please verify your phone number before logging in" });
-    }
+    //     if (!user.isVerified) {
+    //   return res.status(403).json({ message: "Please verify your phone number before logging in" });
+    // }
     const isPasswordValid = await bcrypt.compare(password, user.password);
 
     if (!isPasswordValid) {
