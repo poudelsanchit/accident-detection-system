@@ -101,6 +101,7 @@ model Vehicle {
   vehicleNumber  String
   vehicleType    VehicleType
   vehicleModel   String @default("")
+  ipAddress      String?
 
   driverId       String
   organizationId String

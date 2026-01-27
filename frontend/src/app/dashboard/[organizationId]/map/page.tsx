@@ -41,6 +41,7 @@ if (typeof window !== "undefined") {
 
 interface VehicleData {
   vehicleId: string
+  vehicleNumber?: string
   driverName: string
   vehicleType: string
   latitude: number
@@ -68,6 +69,7 @@ interface DriverVehicle {
 }
 
 import { MapUpdater } from "./MapUpdater"
+import { MapInstance } from "./MapInstance"
 
 export default function MapPage() {
   const { data: session } = useSession()
@@ -95,6 +97,7 @@ export default function MapPage() {
   const currentLocationRef = useRef<{ lat: number; lon: number } | null>(null)
   const driverVehicleRef = useRef<DriverVehicle | null>(null)
   const isSendingDataRef = useRef(false)
+  const mapInstanceRef = useRef<any>(null)
 
   // Fetch organization details
   const fetchOrganization = useCallback(async () => {
@@ -230,6 +233,7 @@ export default function MapPage() {
           if (data.type === "driver:data" && data.data) {
             const vehicleData: VehicleData = {
               vehicleId: data.data.vehicleId,
+              vehicleNumber: data.data.vehicleNumber,
               driverName: data.data.driverName,
               vehicleType: data.data.vehicleType,
               latitude: data.data.latitude,
@@ -413,6 +417,7 @@ export default function MapPage() {
         organizationId: organizationId,
         data: {
           vehicleId: vehicle.id,
+          vehicleNumber: vehicle.vehicleNumber,
           driverName: session?.user?.name || "Driver",
           vehicleType: vehicle.vehicleType,
           latitude: newLocation.lat,
@@ -426,6 +431,7 @@ export default function MapPage() {
       if (!isNaN(newLocation.lat) && !isNaN(newLocation.lon)) {
         const vehicleData: VehicleData = {
           vehicleId: vehicle.id,
+          vehicleNumber: vehicle.vehicleNumber,
           driverName: session?.user?.name || "Driver",
           vehicleType: vehicle.vehicleType,
           latitude: newLocation.lat,
@@ -661,21 +667,21 @@ export default function MapPage() {
               setMapReady(true)
             }}
           >
-            {/* OpenStreetMap Tile Layer */}
-            <TileLayer
-              attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-              url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-            />
-            
-            {/* Mapbox Tile Layer (optional - uncomment to use Mapbox instead of OpenStreetMap) */}
-            {/* 
-            {process.env.NEXT_PUBLIC_MAPBOX_TOKEN && (
+            {/* Mapbox Tile Layer */}
+            {process.env.NEXT_PUBLIC_MAPBOX_TOKEN ? (
               <TileLayer
                 attribution='&copy; <a href="https://www.mapbox.com/about/maps/">Mapbox</a> | &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
                 url={`https://api.mapbox.com/styles/v1/mapbox/streets-v11/tiles/{z}/{x}/{y}?access_token=${process.env.NEXT_PUBLIC_MAPBOX_TOKEN}`}
+                tileSize={512}
+                zoomOffset={-1}
+              />
+            ) : (
+              /* Fallback to OpenStreetMap if Mapbox token is not available */
+              <TileLayer
+                attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+                url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
               />
             )}
-            */}
 
             {/* Vehicle Markers - Only render when map is ready */}
             {mapReady && Array.from(vehicles.values())
@@ -699,7 +705,7 @@ export default function MapPage() {
                   >
                     <Popup>
                       <div className="p-2 min-w-[200px]">
-                        <h3 className="font-semibold text-lg mb-2">{vehicle.vehicleId}</h3>
+                        <h3 className="font-semibold text-lg mb-2">{vehicle.vehicleNumber || vehicle.vehicleId}</h3>
                         <div className="space-y-1 text-sm">
                           <p><strong>Driver:</strong> {vehicle.driverName}</p>
                           <p><strong>Type:</strong> {vehicle.vehicleType}</p>
@@ -722,6 +728,7 @@ export default function MapPage() {
               .filter(Boolean)}
 
             <MapUpdater vehicles={vehicles} />
+            <MapInstance setMapInstance={(map) => { mapInstanceRef.current = map }} />
           </MapContainer>
         )}
       </div>
@@ -738,19 +745,38 @@ export default function MapPage() {
                 key={vehicle.vehicleId}
                 className="p-3 border rounded-lg hover:bg-muted cursor-pointer"
                 onClick={() => {
-                  // Focus on vehicle on map
-                  const map = document.querySelector(".leaflet-container") as any
-                  if (map && map._leaflet_id) {
-                    const leafletMap = (window as any).L?.map?.get(map._leaflet_id)
-                    if (leafletMap) {
-                      leafletMap.setView([vehicle.latitude, vehicle.longitude], 15)
+                  // Focus on vehicle on map with smooth pan and zoom
+                  const map = mapInstanceRef.current
+                  if (map && vehicle.latitude && vehicle.longitude && L) {
+                    try {
+                      // Check if vehicle is currently visible in viewport
+                      const bounds = map.getBounds()
+                      const vehicleLatLng = L.latLng(vehicle.latitude, vehicle.longitude)
+                      
+                      if (!bounds.contains(vehicleLatLng)) {
+                        // Vehicle is not visible, pan and zoom to it
+                        map.setView(
+                          [vehicle.latitude, vehicle.longitude], 
+                          15, 
+                          { animate: true, duration: 0.5 }
+                        )
+                      } else {
+                        // Vehicle is visible, just center on it with a slight zoom
+                        map.setView(
+                          [vehicle.latitude, vehicle.longitude], 
+                          Math.max(map.getZoom(), 15),
+                          { animate: true, duration: 0.5 }
+                        )
+                      }
+                    } catch (error) {
+                      console.error("Error focusing on vehicle:", error)
                     }
                   }
                 }}
               >
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="font-medium">{vehicle.vehicleId}</p>
+                    <p className="font-medium">{vehicle.vehicleNumber || vehicle.vehicleId}</p>
                     <p className="text-sm text-muted-foreground">{vehicle.driverName}</p>
                   </div>
                   <span className="text-2xl">
