@@ -22,10 +22,19 @@ export const verifyCodeSchema = z.object({
         .regex(/^[0-9]+$/, "Verification code must contain only numbers")
 })
 
-export const loginSchema = z.object({
+export const resendCodeSchema = z.object({
     phoneNumber: z.string()
         .min(10, "Phone number must be at least 10 characters")
         .regex(/^[0-9+\-\s()]+$/, "Phone number must contain only numbers and valid characters"),
-    password: z.string()
-        .min(1, "Password is required")
+    phoneNumberPrefix: z.string()
+        .min(1, "Phone number prefix is required")
+        .regex(/^\+?[0-9]+$/, "Phone number prefix must be a valid country code")
 })
+
+// export const loginSchema = z.object({
+//     phoneNumber: z.string()
+//         .min(10, "Phone number must be at least 10 characters")
+//         .regex(/^[0-9+\-\s()]+$/, "Phone number must contain only numbers and valid characters"),
+//     password: z.string()
+//         .min(1, "Password is required")
+// })
