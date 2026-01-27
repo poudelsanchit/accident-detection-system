@@ -7,6 +7,7 @@ declare module "next-auth" {
     phone: string;
     name: string;
     accessToken: string;
+    isVerified: boolean;
   }
 
   interface Session {
@@ -15,6 +16,7 @@ declare module "next-auth" {
       phone: string;
       name: string;
       accessToken: string;
+      isVerified: boolean;
     } & DefaultSession["user"];
     accessToken: string;
   }
@@ -26,5 +28,6 @@ declare module "next-auth/jwt" {
     phone: string;
     name: string;
     accessToken: string; 
+    isVerified: boolean;
   }
 }

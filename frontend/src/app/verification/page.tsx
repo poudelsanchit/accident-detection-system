@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { signOut } from "next-auth/react";
+import { signOut, useSession } from "next-auth/react";
 import { Clock, LogOut, Shield, RefreshCw } from "lucide-react";
 import { Button } from "@/core/components/ui/button";
 import {
@@ -15,6 +15,8 @@ import { Alert, AlertDescription } from "@/core/components/ui/alert";
 import { Input } from "@/core/components/ui/input";
 
 export default function VerificationPage() {
+  const { data: session } = useSession();
+  const phoneNumber = session?.user?.phone;
   const [otp, setOtp] = useState(["", "", "", "", "", ""]);
   const [countdown, setCountdown] = useState(60);
   const [canResend, setCanResend] = useState(false);
@@ -87,10 +89,10 @@ export default function VerificationPage() {
 
     try {
       // Add your verification API call here
-      const response = await fetch("/api/verify-otp", {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/auth/verify-code`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ otp: otpValue }),
+        body: JSON.stringify({ phoneNumber: phoneNumber, verificationCode: otpValue }),
       });
 
       if (!response.ok) {
