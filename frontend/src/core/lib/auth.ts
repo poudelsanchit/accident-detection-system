@@ -64,14 +64,15 @@ export const authOptions: NextAuthOptions = {
         token.accessToken = user.accessToken;
       }
 
-      // 2) On every request, refresh isVerified
+      // 2) On every request, refresh isVerified from database
       if (token.accessToken) {
         try {
           const res = await fetch(
             `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/auth/current-user-status`,
             {
               headers: {
-                Authorization: `${token.accessToken}`,
+                Authorization: token.accessToken,
+                "Content-Type": "application/json",
               },
             }
           );
@@ -81,7 +82,7 @@ export const authOptions: NextAuthOptions = {
             token.isVerified = latest.isVerified;
           }
         } catch (error) {
-          console.log("Failed to refresh token:", error);
+          console.log("Failed to refresh isVerified status:", error);
         }
       }
 

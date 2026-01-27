@@ -17,17 +17,7 @@ export const createOrganization = async (req: Request, res: Response) => {
                 errors: validationResult.error.issues
             })
         }
-        const organizationMember=await prisma.organizationMember.findFirst({
-            where:{
-                userId:userId,
-            }
-        })
-        if(!organizationMember){
-            return res.status(403).json({ message: "You are not a member of any organization" })
-        }
-        if(organizationMember.role!=="ADMIN"){
-            return res.status(403).json({ message: "You are not authorized to create an organization" })
-        }
+      
         const {name,address,phoneNumber,type}=validationResult.data
         const organization=await prisma.organization.create({
             data:{
@@ -61,6 +51,57 @@ export const getOrganizations = async (req: Request, res: Response) => {
         return res.status(200).json({
             message:"Organizations fetched successfully",
             organizations:organization
+        })
+    }
+    catch(err:any){
+        console.error(err.message)
+        return res.status(500).json({ message: "Internal server error" })
+    }
+}
+
+export const getMyOrganizations = async (req: Request, res: Response) => {
+    try{
+        const userId = (req as any).user?.userId
+        
+        if (!userId) {
+            return res.status(401).json({ message: "Unauthorized" })
+        }
+
+        // Get all organizations where the user is a member
+        const memberships = await prisma.organizationMember.findMany({
+            where: {
+                userId: userId
+            },
+            include: {
+                organization: {
+                    include: {
+                        members: {
+                            include: {
+                                user: {
+                                    select: {
+                                        id: true,
+                                        phoneNumber: true,
+                                        fullName: true
+                                    }
+                                }
+                            }
+                        },
+                        vehicles: true,
+                        accidents: true
+                    }
+                }
+            }
+        })
+
+        // Transform the data to include the user's role in each organization
+        const organizations = memberships.map(membership => ({
+            ...membership.organization,
+            myRole: membership.role
+        }))
+
+        return res.status(200).json({
+            message: "User organizations fetched successfully",
+            organizations: organizations
         })
     }
     catch(err:any){

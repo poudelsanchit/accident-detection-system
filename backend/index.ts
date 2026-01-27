@@ -3,6 +3,7 @@ import express from "express"
 import cors from "cors"
 import authRouter from "./routes/auth"
 import organizationRouter from "./routes/organization"
+import vehicleRouter from "./routes/vehicle"
 import { authMiddleware } from "./middleware/authMiddleware"
 import invitationRouter from "./routes/invitation"
 const app = express()
@@ -21,6 +22,7 @@ app.get("/", (req, res) => {
 
 app.use("/api/auth", authRouter)
 app.use("/api/organization", authMiddleware, organizationRouter)
+app.use("/api/vehicle", authMiddleware, vehicleRouter)
 app.use("/api/invitation", authMiddleware, invitationRouter)
 app.listen(3000, () => {
   console.log("Server is running on port 3000")

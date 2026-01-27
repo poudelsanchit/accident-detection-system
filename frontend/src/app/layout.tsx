@@ -3,6 +3,7 @@ import { Outfit } from "next/font/google";
 import "./globals.css";
 import { Toaster } from "@/core/components/ui/sonner";
 import AuthProvider from "@/core/lib/auth-provider";
+import { LayoutWrapper } from "@/core/components/layout-wrapper";
 
 const outfit = Outfit({
   weight: ['100', '200', '300', '400', '500', '600', '700', '800', '900']
@@ -24,7 +25,9 @@ export default function RootLayout({
       >
         <Toaster />
         <AuthProvider>
-        {children}
+          <LayoutWrapper>
+            {children}
+          </LayoutWrapper>
         </AuthProvider>
       </body>
     </html>

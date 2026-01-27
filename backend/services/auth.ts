@@ -175,9 +175,9 @@ export const login = async (req: Request, res: Response) => {
     }
 
     // Check if user is verified
-    if (!user.isVerified) {
-      return res.status(403).json({ message: "Please verify your phone number before logging in" });
-    }
+    // if (!user.isVerified) {
+    //   return res.status(403).json({ message: "Please verify your phone number before logging in" });
+    // }
     const isPasswordValid = await bcrypt.compare(password, user.password);
 
     if (!isPasswordValid) {
@@ -207,8 +207,43 @@ export const login = async (req: Request, res: Response) => {
       userId: user.id,
       phoneNumber: user.phoneNumber,
       fullName: user.fullName,
+      isVerified: user.isVerified,
     });
   } catch (err) {
+    return res.status(500).json({ message: "Internal server error" });
+  }
+};
+
+export const getCurrentUserStatus = async (req: Request, res: Response) => {
+  try {
+    const userId = (req as any).user?.userId;
+    
+    if (!userId) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        isVerified: true,
+        phoneNumber: true,
+        fullName: true,
+      },
+    });
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    return res.status(200).json({
+      isVerified: user.isVerified,
+      userId: user.id,
+      phoneNumber: user.phoneNumber,
+      fullName: user.fullName,
+    });
+  } catch (err) {
+    console.error(err);
     return res.status(500).json({ message: "Internal server error" });
   }
 };
