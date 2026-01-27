@@ -2,6 +2,7 @@ import type { Request, Response } from "express"
 import { prisma } from "../config/prismaClient"
 import createMessage from "../config/twilio"
 import jwt from "jsonwebtoken"
+import bcrypt from "bcryptjs"
 import { registerSchema, verifyCodeSchema, loginSchema } from "../schemas/auth"
 
 export const register = async (req: Request, res: Response) => {
@@ -26,11 +27,15 @@ export const register = async (req: Request, res: Response) => {
         if (existingUser) {
             return res.status(400).json({ message: "User already exists" })
         }
+        
+        // Hash the password before storing
+        const hashedPassword = await bcrypt.hash(password, 10)
+        
         const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
         await prisma.user.create({
             data: {
                 phoneNumber,
-                password,
+                password: hashedPassword,
                 verificationCode
             }
         })
@@ -90,13 +95,21 @@ export const login = async (req: Request, res: Response) => {
             })
         }
         const { phoneNumber, password } = validationResult.data
+        
+        // Find user by phone number only
         const user = await prisma.user.findUnique({
-            where: { phoneNumber ,
-                password
-            }
+            where: { phoneNumber }
         })
+        
         if (!user) {
-            return res.status(404).json({ message: "user and password donot match" })
+            return res.status(401).json({ message: "Invalid phone number or password" })
+        }
+        
+        // Compare the provided password with the hashed password
+        const isPasswordValid = await bcrypt.compare(password, user.password)
+        
+        if (!isPasswordValid) {
+            return res.status(401).json({ message: "Invalid phone number or password" })
         }
         if(user.isVerified === false) {
             return res.status(400).json({ message: "User is not verified" })
@@ -105,7 +118,7 @@ export const login = async (req: Request, res: Response) => {
             throw new Error("JWT_SECRET is not configured")
         }
         const token = jwt.sign({ userId: user.id ,phoneNumber: user.phoneNumber,fullName: user.fullName}, process.env.JWT_SECRET, { expiresIn: "1h" })
-        return res.status(200).json({ message: "Login successful", token })
+        return res.status(200).json({ message: "Login successful", token,userId:user.id,phoneNumber:user.phoneNumber,fullName:user.fullName })
     } catch(err) {
         console.error(err)
         return res.status(500).json({ message: "Internal server error" })
