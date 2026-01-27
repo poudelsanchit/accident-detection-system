@@ -17,6 +17,17 @@ export const createOrganization = async (req: Request, res: Response) => {
                 errors: validationResult.error.issues
             })
         }
+        const organizationMember=await prisma.organizationMember.findFirst({
+            where:{
+                userId:userId,
+            }
+        })
+        if(!organizationMember){
+            return res.status(403).json({ message: "You are not a member of any organization" })
+        }
+        if(organizationMember.role!=="ADMIN"){
+            return res.status(403).json({ message: "You are not authorized to create an organization" })
+        }
         const {name,address,phoneNumber,type}=validationResult.data
         const organization=await prisma.organization.create({
             data:{
