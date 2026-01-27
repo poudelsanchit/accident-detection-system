@@ -166,8 +166,6 @@ export const login = async (req: Request, res: Response) => {
     }
 
     const { phoneNumber, password } = validationResult.data;
-
-    // Find user by phone number only
     const user = await prisma.user.findUnique({
       where: { phoneNumber },
     });
@@ -176,10 +174,14 @@ export const login = async (req: Request, res: Response) => {
       return res.status(401).json({ message: "Invalid phone number or password" });
     }
 
-    // Compare the provided password with the hashed password
+    // Check if user is verified
+    if (!user.isVerified) {
+      return res.status(403).json({ message: "Please verify your phone number before logging in" });
+    }
     const isPasswordValid = await bcrypt.compare(password, user.password);
 
     if (!isPasswordValid) {
+      console.log("Password mismatch for user:", user.id);
       return res.status(401).json({ message: "Invalid phone number or password" });
     }
 
@@ -207,7 +209,6 @@ export const login = async (req: Request, res: Response) => {
       fullName: user.fullName,
     });
   } catch (err) {
-    console.error(err);
     return res.status(500).json({ message: "Internal server error" });
   }
 };

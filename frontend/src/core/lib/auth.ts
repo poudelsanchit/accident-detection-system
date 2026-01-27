@@ -8,41 +8,46 @@ export const authOptions: NextAuthOptions = {
     CredentialsProvider({
       name: "Credentials",
       credentials: {
-        phoneNumber: { label: "Phone Number", type: "phone" },
+        phone: { label: "Phone Number", type: "phone" },
         password: { label: "Password", type: "password" },
       },
       async authorize(credentials) {
-        if (!credentials?.phoneNumber || !credentials?.password) {
+        console.log(credentials)
+        if (!credentials?.phone || !credentials?.password) {
           return null;
         }
 
         try {
           const response = await fetch(
-            `${process.env.BACKEND_URL}/api/auth/login`,
+            `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/auth/login`,
             {
               method: "POST",
               headers: {
                 "Content-Type": "application/json",
               },
               body: JSON.stringify({
-                phoneNumber: credentials.phoneNumber,
+                phoneNumber: credentials.phone,
                 password: credentials.password,
               }),
             },
           );
-
+          
           if (!response.ok) {
+            const errorData = await response.json();
+            console.log("Login error:", errorData);
             return null;
           }
 
-          const user = await response.json();
+          const data = await response.json();
+          console.log("Login response:", data);
 
-          // Return user object with accessToken that matches your User type
+          // Map backend response fields to frontend user object
+          // Backend returns: { token, userId, phoneNumber, fullName }
           return {
-            id: user.id,
-            phone: user.phone,
-            name: user.username,
-            accessToken: user.accessToken || user.token || "", // Add the missing accessToken
+            id: data.userId,
+            phone: data.phoneNumber,
+            name: data.fullName || "",
+            accessToken: data.token || "",
           };
         } catch (error) {
           console.log("Authentication Error", error);
