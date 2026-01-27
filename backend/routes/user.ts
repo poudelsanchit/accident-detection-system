@@ -1,7 +1,6 @@
 import { Router } from "express"
-import { createUser, deleteUser, getUserById, getUsers, updateUser } from "../services/user"
+import { deleteUser, getUserById, getUsers, updateUser } from "../services/user"
 const router=Router()
-router.post("/",createUser)
 router.get('/',getUsers)
 router.get('/:id',getUserById)
 router.put('/:id',updateUser)
