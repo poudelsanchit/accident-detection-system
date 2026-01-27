@@ -1,108 +1,144 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
-// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
-
+// Prisma Client Generator
 generator client {
   provider = "prisma-client"
   output   = "../generated/prisma"
 }
 
+// Database
 datasource db {
   provider = "postgresql"
 }
 
-model User{
-  id String @id @default(uuid())
-  phoneNumber String @unique
-  email String @unique
-  isActive Boolean @default(true)
-  password String
-  role Role
-  organizationId String?
-  vehicles Vehicle[] @relation("DriverVehicles")
-  organization Organization? @relation(fields: [organizationId], references: [id])
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-}
-enum Role{
-  SCHOOL_ADMINISTRATOR
-  HOSPITAL_ADMIN
-  USER
-  DRIVER
-}
-model Organization{
-  id String @id @default(uuid())
-  name String 
-  address String
-  phoneNumber String
-  organizationType OrganizationType
-  ownerId String
-  users User[]
-  vehicles Vehicle[]
-  accidents Accident[]
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-}
-enum OrganizationType{
+//////////////////////
+// ENUMS
+//////////////////////
+
+enum OrganizationType {
   SCHOOL
   HOSPITAL
   MUNICIPALITY
   POLICE_STATION
   PRIVATE
 }
-model Vehicle{
-  id String @id @default(uuid())
-  driverId String
-  organizationId String
-  vehicleNumber String
-  vehicleType VehicleType
-  vehicleModel String
-  driver User @relation("DriverVehicles", fields: [driverId], references: [id])
-  organization Organization @relation(fields: [organizationId], references: [id])
-  accidents Accident[]
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+
+enum OrganizationMemberRole {
+  ADMIN
+  DRIVER
+  VIEWER
 }
-model Accident{
-  id String @id @default(uuid())
-  title String
-  description String?
-  latitude Float
-  longitude Float
-  occurredAt DateTime
-  status AccidentStatus
-  vehicleId String
-  vehicle Vehicle @relation(fields: [vehicleId], references: [id])
-  organizationId String
-  organization Organization @relation(fields: [organizationId], references: [id])
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-}
-enum AccidentStatus{
-  REPORTED
-  CONFIRMED
-  RESOLVED
-}
-enum VehicleType{
+
+enum VehicleType {
   CAR
   MOTORCYCLE
   TRUCK
   BUS
   OTHER
 }
-enum AlertType{
+
+enum AccidentStatus {
+  REPORTED
+  CONFIRMED
+  RESOLVED
+}
+
+enum AlertType {
   SMS
   PUSH
   EMAIL
 }
-model Alert{
-  id String @id @default(uuid())
-  type AlertType
-  message String
-  
+
+//////////////////////
+// MODELS
+//////////////////////
+
+model User {
+  id          String @id @default(uuid())
+  phoneNumber String @unique
+  password    String
+  isActive    Boolean @default(true)
+  isVerified Boolean @default(false)
+  verificationCode String?
+  fullName String?
+  memberships OrganizationMember[]
+  vehicles    Vehicle[] @relation("DriverVehicles")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model Organization {
+  id               String @id @default(uuid())
+  name             String
+  address          String
+  phoneNumber      String
+  organizationType OrganizationType
+
+  members          OrganizationMember[]
+  vehicles         Vehicle[]
+  accidents        Accident[]
+
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+}
+
+model OrganizationMember {
+  id             String @id @default(uuid())
+  organizationId String
+  userId         String
+  role           OrganizationMemberRole
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([organizationId, userId])
+}
+
+model Vehicle {
+  id             String @id @default(uuid())
+  vehicleNumber  String
+  vehicleType    VehicleType
+  vehicleModel   String
+
+  driverId       String
+  organizationId String
+
+  driver         User @relation("DriverVehicles", fields: [driverId], references: [id])
+  organization   Organization @relation(fields: [organizationId], references: [id])
+
+  accidents      Accident[]
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([organizationId, vehicleNumber])
+}
+
+model Accident {
+  id             String @id @default(uuid())
+  title          String
+  description    String?
+  latitude       Float
+  longitude      Float
+  occurredAt     DateTime
+  status         AccidentStatus
+
+  vehicleId      String
+  organizationId String
+
+  vehicle        Vehicle @relation(fields: [vehicleId], references: [id])
+  organization   Organization @relation(fields: [organizationId], references: [id])
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+model Alert {
+  id        String @id @default(uuid())
+  type      AlertType
+  message   String
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
-
