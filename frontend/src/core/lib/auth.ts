@@ -8,12 +8,11 @@ export const authOptions: NextAuthOptions = {
     CredentialsProvider({
       name: "Credentials",
       credentials: {
-        phone: { label: "Phone", type: "phone" }, //root1@gmail.com
-        password: { label: "Password", type: "password" }, // rootpassword1
+        phoneNumber: { label: "Phone Number", type: "phone" },
+        password: { label: "Password", type: "password" },
       },
-      // check in database
       async authorize(credentials) {
-        if (!credentials?.phone || !credentials?.password) {
+        if (!credentials?.phoneNumber || !credentials?.password) {
           return null;
         }
 
@@ -26,22 +25,24 @@ export const authOptions: NextAuthOptions = {
                 "Content-Type": "application/json",
               },
               body: JSON.stringify({
-                phone: credentials.phone,
+                phoneNumber: credentials.phoneNumber,
                 password: credentials.password,
               }),
             },
           );
+
           if (!response.ok) {
             return null;
           }
 
           const user = await response.json();
 
-          // Return user object that will be stored in JWT
+          // Return user object with accessToken that matches your User type
           return {
             id: user.id,
             phone: user.phone,
             name: user.username,
+            accessToken: user.accessToken || user.token || "", // Add the missing accessToken
           };
         } catch (error) {
           console.log("Authentication Error", error);
@@ -62,6 +63,7 @@ export const authOptions: NextAuthOptions = {
         token.id = user.id;
         token.phone = user.phone;
         token.name = user.name;
+        token.accessToken = user.accessToken; // Add accessToken to JWT
       }
       return token;
     },
@@ -71,6 +73,7 @@ export const authOptions: NextAuthOptions = {
         session.user.id = token.id;
         session.user.phone = token.phone;
         session.user.name = token.name;
+        session.user.accessToken = token.accessToken; // Add accessToken to session
       }
       return session;
     },

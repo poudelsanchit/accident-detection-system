@@ -9,8 +9,10 @@ import Benefits from './sections/benefits';
 import Testimonials from './sections/testimonials';
 import CTA from './sections/cta';
 import Footer from './sections/footer';
+import { useRouter } from 'next/navigation';
 
 const LandingPage = () => {
+    const router = useRouter()
     return (
         <div className="min-h-screen bg-white overflow-hidden">
             {/* Navigation */}
@@ -32,6 +34,7 @@ const LandingPage = () => {
                         whileHover={{ scale: 1.05, boxShadow: '0 10px 30px rgba(220, 38, 38, 0.3)' }}
                         whileTap={{ scale: 0.95 }}
                         className="px-6 py-2.5 bg-linear-to-r from-red-600 to-red-700 text-white rounded-full text-sm font-semibold hover:from-red-700 hover:to-red-800 transition-all shadow-lg"
+                        onClick={() => { router.push("/auth/signup") }}
                     >
                         Get Started
                     </motion.button>
