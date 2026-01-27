@@ -9,7 +9,7 @@ import {
     SelectTrigger,
     SelectValue,
 } from "@/core/components/ui/select"
-import { Plus, Building2, MapPin, Phone, Users, Car, AlertTriangle } from "lucide-react"
+import { Plus, Building2, MapPin, Phone, Users, Car, AlertTriangle, Map } from "lucide-react"
 import { useSession } from "next-auth/react"
 import { useState, useEffect } from "react"
 import { useRouter } from "next/navigation"
@@ -308,6 +308,19 @@ export default function Dashboard() {
                                         <AlertTriangle className="h-4 w-4" />
                                         <span>{org.accidents?.length || 0} Accidents</span>
                                     </div>
+                                </div>
+                                <div className="pt-3">
+                                    <Button
+                                        onClick={(e) => {
+                                            e.stopPropagation()
+                                            router.push(`/dashboard/${org.id}/map`)
+                                        }}
+                                        variant="outline"
+                                        className="w-full"
+                                    >
+                                        <Map className="mr-2 h-4 w-4" />
+                                        View Map
+                                    </Button>
                                 </div>
                             </div>
                         </div>
