@@ -9,7 +9,9 @@ const createOrganizationSchema = z.object({
 })
 export const createOrganization = async (req: Request, res: Response) => {
     try{
+        console.log(req.body)
         const validationResult = createOrganizationSchema.safeParse(req.body)
+        
         const userId = (req as any).user.userId
         if (!validationResult.success) {
             return res.status(400).json({

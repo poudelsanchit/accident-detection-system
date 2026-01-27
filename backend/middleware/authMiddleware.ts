@@ -8,11 +8,12 @@ export const authMiddleware = (req: Request, res: Response, next: NextFunction) 
             return res.status(401).json({ message: "Unauthorized" })
         }
         const decoded = jwt.verify(token, process.env.JWT_SECRET as string) as { userId: string }
-        console.log(decoded)
         if(!decoded){
             return res.status(401).json({ message: "Unauthorized" })
         }
+      
         (req as any).user = decoded
+        console.log(decoded)
         next()
     } catch(err) {
         console.error(err)
