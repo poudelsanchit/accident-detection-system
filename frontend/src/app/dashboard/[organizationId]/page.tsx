@@ -136,7 +136,7 @@ export default function OrganizationDetailPage() {
         port: 81,
     })
     const [drivers, setDrivers] = useState<Array<{ id: string; phoneNumber: string; fullName: string | null }>>([])
-    const [activeTab, setActiveTab] = useState<"overview" | "vehicles" | "settings">("overview")
+    const [activeTab, setActiveTab] = useState<"overview" | "vehicles" | "settings" | "reports">("overview")
     const [accidents, setAccidents] = useState<Accident[]>([])
     const [accidentsLast24h, setAccidentsLast24h] = useState<Accident[]>([])
     const [loadingAccidents, setLoadingAccidents] = useState(true)
@@ -184,6 +184,12 @@ export default function OrganizationDetailPage() {
     // Driver safety dialog state (only for drivers)
     const [driverSafetyDialogVisible, setDriverSafetyDialogVisible] = useState(false)
     const [currentAccidentId, setCurrentAccidentId] = useState<string | null>(null)
+    
+    // Reports state
+    const [reportFilter, setReportFilter] = useState<"week" | "month" | "custom">("week")
+    const [reportStartDate, setReportStartDate] = useState("")
+    const [reportEndDate, setReportEndDate] = useState("")
+    const [isGeneratingReport, setIsGeneratingReport] = useState(false)
     
     // Vehicle tracking state for map
     interface VehicleData {
@@ -396,6 +402,64 @@ export default function OrganizationDetailPage() {
         } catch (error) {
             console.error("Error resolving accident:", error)
             toast.error("An error occurred while resolving the accident")
+        }
+    }
+
+    // Generate accident report PDF
+    const handleGenerateReport = async () => {
+        if (!session?.user?.accessToken || !organizationId) return
+
+        try {
+            setIsGeneratingReport(true)
+
+            let startDate: Date
+            let endDate: Date = new Date()
+
+            if (reportFilter === "week") {
+                startDate = new Date()
+                startDate.setDate(startDate.getDate() - 7)
+            } else if (reportFilter === "month") {
+                startDate = new Date()
+                startDate.setMonth(startDate.getMonth() - 1)
+            } else {
+                if (!reportStartDate || !reportEndDate) {
+                    toast.error("Please select both start and end dates")
+                    setIsGeneratingReport(false)
+                    return
+                }
+                startDate = new Date(reportStartDate)
+                endDate = new Date(reportEndDate)
+            }
+
+            const response = await fetch(
+                `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/report/accident/${organizationId}?startDate=${startDate.toISOString()}&endDate=${endDate.toISOString()}`,
+                {
+                    headers: {
+                        Authorization: session.user.accessToken,
+                    },
+                }
+            )
+
+            if (response.ok) {
+                const blob = await response.blob()
+                const url = window.URL.createObjectURL(blob)
+                const a = document.createElement("a")
+                a.href = url
+                a.download = `accident-report-${organizationId}-${Date.now()}.pdf`
+                document.body.appendChild(a)
+                a.click()
+                window.URL.revokeObjectURL(url)
+                document.body.removeChild(a)
+                toast.success("Report generated successfully")
+            } else {
+                const errorData = await response.json()
+                toast.error(errorData.message || "Failed to generate report")
+            }
+        } catch (error) {
+            console.error("Error generating report:", error)
+            toast.error("An error occurred while generating the report")
+        } finally {
+            setIsGeneratingReport(false)
         }
     }
 
@@ -1615,6 +1679,19 @@ export default function OrganizationDetailPage() {
                         Settings
                     </div>
                 </button>
+                <button
+                    onClick={() => setActiveTab("reports")}
+                    className={`px-4 py-2 font-medium transition-colors ${
+                        activeTab === "reports"
+                            ? "border-b-2 border-primary text-primary"
+                            : "text-muted-foreground hover:text-foreground"
+                    }`}
+                >
+                    <div className="flex items-center gap-2">
+                        <FileWarning className="h-4 w-4" />
+                        Reports
+                    </div>
+                </button>
             </div>
 
             {/* Overview tab: map left, metrics + accident + charts + vehicles right */}
@@ -2214,6 +2291,107 @@ export default function OrganizationDetailPage() {
                             </div>
                         )}
                     </div>
+                </div>
+            )}
+
+            {/* Reports Tab */}
+            {activeTab === "reports" && (
+                <div className="space-y-6">
+                    <Card>
+                        <CardHeader>
+                            <CardTitle className="flex items-center gap-2">
+                                <FileWarning className="h-5 w-5" />
+                                Accident Reports
+                            </CardTitle>
+                            <CardDescription>
+                                Generate and download PDF reports of accidents for this organization
+                            </CardDescription>
+                        </CardHeader>
+                        <CardContent className="space-y-6">
+                            {/* Filter Selection */}
+                            <div className="space-y-4">
+                                <Label>Report Period</Label>
+                                <div className="flex gap-2">
+                                    <Button
+                                        variant={reportFilter === "week" ? "default" : "outline"}
+                                        onClick={() => setReportFilter("week")}
+                                        className="flex-1"
+                                    >
+                                        Last Week
+                                    </Button>
+                                    <Button
+                                        variant={reportFilter === "month" ? "default" : "outline"}
+                                        onClick={() => setReportFilter("month")}
+                                        className="flex-1"
+                                    >
+                                        Last Month
+                                    </Button>
+                                    <Button
+                                        variant={reportFilter === "custom" ? "default" : "outline"}
+                                        onClick={() => setReportFilter("custom")}
+                                        className="flex-1"
+                                    >
+                                        Custom Range
+                                    </Button>
+                                </div>
+                            </div>
+
+                            {/* Custom Date Range */}
+                            {reportFilter === "custom" && (
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div className="space-y-2">
+                                        <Label htmlFor="startDate">Start Date</Label>
+                                        <Input
+                                            id="startDate"
+                                            type="date"
+                                            value={reportStartDate}
+                                            onChange={(e) => setReportStartDate(e.target.value)}
+                                        />
+                                    </div>
+                                    <div className="space-y-2">
+                                        <Label htmlFor="endDate">End Date</Label>
+                                        <Input
+                                            id="endDate"
+                                            type="date"
+                                            value={reportEndDate}
+                                            onChange={(e) => setReportEndDate(e.target.value)}
+                                        />
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Generate Button */}
+                            <Button
+                                onClick={handleGenerateReport}
+                                disabled={isGeneratingReport}
+                                className="w-full"
+                                size="lg"
+                            >
+                                {isGeneratingReport ? (
+                                    <>
+                                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                        Generating Report...
+                                    </>
+                                ) : (
+                                    <>
+                                        <FileWarning className="mr-2 h-4 w-4" />
+                                        Generate PDF Report
+                                    </>
+                                )}
+                            </Button>
+
+                            {/* Info */}
+                            <div className="p-4 bg-muted rounded-lg text-sm">
+                                <p className="font-medium mb-2">Report includes:</p>
+                                <ul className="list-disc list-inside space-y-1 text-muted-foreground">
+                                    <li>Organization details and summary</li>
+                                    <li>Accident statistics (total, reported, confirmed, resolved)</li>
+                                    <li>Detailed accident table with date, time, vehicle, driver, location</li>
+                                    <li>Accident status and descriptions</li>
+                                </ul>
+                            </div>
+                        </CardContent>
+                    </Card>
                 </div>
             )}
         </div>
