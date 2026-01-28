@@ -77,6 +77,32 @@ export function Sidebar() {
                         Inbox
                     </Button>
                 </Link>
+                <Link href="/dashboard/public">
+                    <Button
+                        variant={isActive("/dashboard/public") ? "default" : "ghost"}
+                        className={`w-full justify-start ${
+                            isActive("/dashboard/public") 
+                                ? "bg-primary text-primary-foreground hover:bg-primary/90" 
+                                : "hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+                        }`}
+                    >
+                        <Building2 className="mr-2 h-4 w-4" />
+                        Public
+                    </Button>
+                </Link>
+                <Link href="/dashboard/private">
+                    <Button
+                        variant={isActive("/dashboard/private") ? "default" : "ghost"}
+                        className={`w-full justify-start ${
+                            isActive("/dashboard/private") 
+                                ? "bg-primary text-primary-foreground hover:bg-primary/90" 
+                                : "hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+                        }`}
+                    >
+                        <User className="mr-2 h-4 w-4" />
+                        Private
+                    </Button>
+                </Link>
             </nav>
 
             {/* Logout */}

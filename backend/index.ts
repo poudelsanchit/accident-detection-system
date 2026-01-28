@@ -6,6 +6,7 @@ import organizationRouter from "./routes/organization"
 import vehicleRouter from "./routes/vehicle"
 import accidentRouter from "./routes/accident"
 import reportRouter from "./routes/report"
+import dashboardRouter from "./routes/dashboard"
 import { authMiddleware } from "./middleware/authMiddleware"
 import invitationRouter from "./routes/invitation"
 import { WebSocket, WebSocketServer } from "ws"
@@ -24,6 +25,7 @@ app.use("/api/vehicle", authMiddleware, vehicleRouter)
 app.use("/api/invitation", authMiddleware, invitationRouter)
 app.use("/api/accident", authMiddleware, accidentRouter)
 app.use("/api/report", authMiddleware, reportRouter)
+app.use("/api/dashboard", authMiddleware, dashboardRouter)
 
 const httpServer = app.listen(3000, () => {
   console.log("Server is running on port 3000")

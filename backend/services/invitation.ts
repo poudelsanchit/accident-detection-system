@@ -20,18 +20,35 @@ try{
         return res.status(401).json({ message: "Unauthorized" })
     }
 
-    // Verify current user is ADMIN of the organization
+    // Get organization details to check type
+    const organization = await prisma.organization.findUnique({
+        where: { id: organizationId },
+        select: { organizationType: true }
+    })
+
+    if (!organization) {
+        return res.status(404).json({ message: "Organization not found" })
+    }
+
+    // Check if organization is public (MUNICIPALITY or POLICE_STATION)
+    const isPublicOrg = organization.organizationType === 'MUNICIPALITY' || 
+                        organization.organizationType === 'POLICE_STATION'
+
+    // For public organizations, any member can invite
+    // For private organizations, only admins can invite
     const membership = await prisma.organizationMember.findFirst({
         where: {
             userId: currentUserId,
             organizationId,
-            role: "ADMIN"
+            ...(isPublicOrg ? {} : { role: "ADMIN" })
         }
     })
 
     if (!membership) {
         return res.status(403).json({ 
-            message: "Only admins can invite users to the organization" 
+            message: isPublicOrg 
+                ? "You must be a member of this organization to invite users"
+                : "Only admins can invite users to this organization" 
         })
     }
 

@@ -72,7 +72,12 @@ export const getMyOrganizations = async (req: Request, res: Response) => {
         // Get all organizations where the user is a member
         const memberships = await prisma.organizationMember.findMany({
             where: {
-                userId: userId
+                userId: userId,
+                organization: {
+                    organizationType: {
+                        notIn: ['MUNICIPALITY', 'POLICE_STATION']
+                    }
+                }
             },
             include: {
                 organization: {
@@ -111,6 +116,48 @@ export const getMyOrganizations = async (req: Request, res: Response) => {
         return res.status(500).json({ message: "Internal server error" })
     }
 }
+export const getPublicOrganizations = async (req: Request, res: Response) => {
+    try{
+        const userId = (req as any).user?.userId
+        
+        if (!userId) {
+            return res.status(401).json({ message: "Unauthorized" })
+        }
+
+        // Get only MUNICIPALITY and POLICE_STATION organizations
+        const organizations = await prisma.organization.findMany({
+            where: {
+                organizationType: {
+                    in: ['MUNICIPALITY', 'POLICE_STATION']
+                }
+            },
+            include: {
+                members: {
+                    include: {
+                        user: {
+                            select: {
+                                id: true,
+                                phoneNumber: true,
+                                fullName: true
+                            }
+                        }
+                    }
+                },
+                vehicles: true,
+                accidents: true
+            }
+        })
+
+        return res.status(200).json({
+            message: "Public organizations fetched successfully",
+            organizations: organizations
+        })
+    }
+    catch(err:any){
+        console.error(err.message)
+        return res.status(500).json({ message: "Internal server error" })
+    }
+}
 export const getOrganizationById = async (req: Request, res: Response) => {
     try{
         const organizationId=req.params.id
@@ -138,7 +185,8 @@ export const getOrganizationById = async (req: Request, res: Response) => {
 export const updateOrganization = async (req: Request, res: Response) => {}
 export const deleteOrganization = async (req: Request, res: Response) => {
     try{
-        const organizationId=req.params.userId
+        const organizationId=req.params.id
+
         const organization=await prisma.organization.delete({
             where:{
                 id:organizationId as string

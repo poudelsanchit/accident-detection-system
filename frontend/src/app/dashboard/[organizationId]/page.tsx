@@ -253,6 +253,7 @@ export default function OrganizationDetailPage() {
         if (!session?.user?.accessToken) return
 
         try {
+            // Try fetching from my-organizations first
             const response = await fetch(
                 `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/organization/my-organizations`,
                 {
@@ -264,7 +265,25 @@ export default function OrganizationDetailPage() {
 
             if (response.ok) {
                 const data = await response.json()
-                const org = data.organizations.find((o: Organization) => o.id === organizationId)
+                let org = data.organizations.find((o: Organization) => o.id === organizationId)
+                
+                // If not found in my-organizations, try public-organizations
+                if (!org) {
+                    const publicResponse = await fetch(
+                        `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/organization/public-organizations`,
+                        {
+                            headers: {
+                                Authorization: session.user.accessToken,
+                            },
+                        }
+                    )
+                    
+                    if (publicResponse.ok) {
+                        const publicData = await publicResponse.json()
+                        org = publicData.organizations.find((o: Organization) => o.id === organizationId)
+                    }
+                }
+                
                 if (org) {
                     setOrganization(org)
                     // Extract drivers from members
