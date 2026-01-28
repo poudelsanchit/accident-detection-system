@@ -597,8 +597,11 @@ export default function MapPage() {
           const d = JSON.parse(event.data)
           
           // Extract data fields (matching HTML file format exactly)
-          const lat = parseFloat(d.lat)
-          const lon = parseFloat(d.lon)
+          // Hardware may send either { lat, lon } or { lat, lng } (or { latitude, longitude })
+          const latRaw = d.lat ?? d.latitude
+          const lonRaw = d.lon ?? d.lng ?? d.longitude
+          const lat = typeof latRaw === "number" ? latRaw : parseFloat(latRaw)
+          const lon = typeof lonRaw === "number" ? lonRaw : parseFloat(lonRaw)
           const accelX = parseFloat(d.accelX) || 0
           const accelY = parseFloat(d.accelY) || 0
           const accelZ = parseFloat(d.accelZ) || 0
