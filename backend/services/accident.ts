@@ -236,3 +236,59 @@ export const resolveAccident = async (req: Request, res: Response) => {
         return res.status(500).json({ message: "Internal server error" })
     }
 }
+
+export const getMyAccidentAlerts = async (req: Request, res: Response) => {
+    try {
+        const userId = (req as any).user?.userId
+        
+        if (!userId) {
+            return res.status(401).json({ message: "Unauthorized" })
+        }
+        
+        // Get all organizations the user is a member of
+        const memberships = await prisma.organizationMember.findMany({
+            where: { userId },
+            select: { organizationId: true }
+        })
+        
+        const organizationIds = memberships.map(m => m.organizationId)
+        
+        // Get all accidents from those organizations
+        const accidents = await prisma.accident.findMany({
+            where: {
+                organizationId: { in: organizationIds }
+            },
+            include: {
+                vehicle: {
+                    include: {
+                        driver: true
+                    }
+                },
+                organization: true
+            },
+            orderBy: {
+                occurredAt: 'asc' // Ascending order (oldest first)
+            }
+        })
+        
+        // Format accidents as alert messages (similar to SMS format)
+        const alerts = accidents.map(accident => ({
+            id: accident.id,
+            type: 'ACCIDENT_ALERT' as const,
+            title: accident.title,
+            message: `🚨 ACCIDENT ALERT\n\nVehicle: ${accident.vehicle.vehicleNumber} (${accident.vehicle.vehicleModel})\nDriver: ${accident.vehicle.driver.fullName || accident.vehicle.driver.phoneNumber}\nLocation: ${accident.latitude}, ${accident.longitude}\nTime: ${accident.occurredAt.toLocaleString()}\nStatus: ${accident.status}\n\n${accident.description || 'No additional details'}`,
+            status: accident.status,
+            occurredAt: accident.occurredAt,
+            createdAt: accident.createdAt,
+            accident: accident
+        }))
+        
+        return res.status(200).json({ 
+            message: "Accident alerts fetched successfully", 
+            alerts 
+        })
+    } catch (err: any) {
+        console.error(err.message)
+        return res.status(500).json({ message: "Internal server error" })
+    }
+}
