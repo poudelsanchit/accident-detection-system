@@ -33,7 +33,8 @@ export function MapUpdater({ vehicles }: { vehicles: Map<string, VehicleData> })
     if (vehicles.size === 0 || !L || !map) return
     
     // Wait for map to be fully initialized
-    if (!map.getContainer() || !map.getContainer()._leaflet_id) {
+    const container = map.getContainer() as (HTMLElement & { _leaflet_id?: number }) | null
+    if (!container || !container._leaflet_id) {
       return
     }
     

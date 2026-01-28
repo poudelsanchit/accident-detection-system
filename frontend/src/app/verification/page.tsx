@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { signOut, useSession } from "next-auth/react";
+import { useRouter } from "next/navigation";
 import { Clock, LogOut, Shield, RefreshCw } from "lucide-react";
 import { Button } from "@/core/components/ui/button";
 import {
@@ -15,7 +16,8 @@ import { Alert, AlertDescription } from "@/core/components/ui/alert";
 import { Input } from "@/core/components/ui/input";
 
 export default function VerificationPage() {
-  const { data: session } = useSession();
+  const { data: session, update } = useSession();
+  const router = useRouter();
   const phoneNumber = session?.user?.phone;
   const [otp, setOtp] = useState(["", "", "", "", "", ""]);
   const [countdown, setCountdown] = useState(60);
@@ -99,8 +101,9 @@ export default function VerificationPage() {
         throw new Error("Invalid OTP. Please try again.");
       }
 
-      // Redirect to dashboard or home page on success
-      window.location.href = "/dashboard";
+      // Update JWT so isVerified is true (used by middleware to allow /dashboard)
+      await update({ isVerified: true });
+      router.push("/dashboard");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Verification failed");
       setOtp(["", "", "", "", "", ""]);

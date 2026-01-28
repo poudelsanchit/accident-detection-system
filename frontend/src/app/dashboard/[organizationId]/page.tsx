@@ -17,6 +17,13 @@ import {
     DialogTitle,
     DialogTrigger,
 } from "@/core/components/ui/dialog"
+import {
+    Card,
+    CardContent,
+    CardDescription,
+    CardHeader,
+    CardTitle,
+} from "@/core/components/ui/card"
 import { 
     Plus, 
     Car, 
@@ -31,12 +38,42 @@ import {
     X,
     Shield,
     Eye,
-    UserCog
+    UserCog,
+    LayoutDashboard,
+    Map,
+    Users,
+    CheckCircle,
+    FileWarning
 } from "lucide-react"
 import { useSession } from "next-auth/react"
 import { useState, useEffect } from "react"
 import { useRouter, useParams } from "next/navigation"
 import { toast } from "sonner"
+import {
+    LineChart,
+    Line,
+    XAxis,
+    YAxis,
+    CartesianGrid,
+    Tooltip,
+    ResponsiveContainer,
+    Area,
+    AreaChart,
+    BarChart,
+    Bar,
+} from "recharts"
+import { OverviewMap } from "./OverviewMap"
+
+interface Accident {
+    id: string
+    title: string
+    description: string | null
+    latitude: number
+    longitude: number
+    occurredAt: string
+    status: string
+    vehicle?: { vehicleNumber: string; vehicleType: string }
+}
 
 interface Vehicle {
     id: string
@@ -94,7 +131,10 @@ export default function OrganizationDetailPage() {
         port: 81,
     })
     const [drivers, setDrivers] = useState<Array<{ id: string; phoneNumber: string; fullName: string | null }>>([])
-    const [activeTab, setActiveTab] = useState<"vehicles" | "settings">("vehicles")
+    const [activeTab, setActiveTab] = useState<"overview" | "vehicles" | "settings">("overview")
+    const [accidents, setAccidents] = useState<Accident[]>([])
+    const [accidentsLast24h, setAccidentsLast24h] = useState<Accident[]>([])
+    const [loadingAccidents, setLoadingAccidents] = useState(true)
     const [invitations, setInvitations] = useState<Array<{
         id: string
         inviteRole: string
@@ -178,6 +218,36 @@ export default function OrganizationDetailPage() {
         }
     }
 
+    // Fetch accidents (all and last 24h)
+    const fetchAccidents = async () => {
+        if (!session?.user?.accessToken || !organizationId) return
+        try {
+            setLoadingAccidents(true)
+            const [allRes, last24Res] = await Promise.all([
+                fetch(
+                    `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/accident?organizationId=${organizationId}`,
+                    { headers: { Authorization: session.user.accessToken } }
+                ),
+                fetch(
+                    `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/accident?organizationId=${organizationId}&occurredAfter=${new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()}`,
+                    { headers: { Authorization: session.user.accessToken } }
+                ),
+            ])
+            if (allRes.ok) {
+                const d = await allRes.json()
+                setAccidents(d.accidents || [])
+            }
+            if (last24Res.ok) {
+                const d = await last24Res.json()
+                setAccidentsLast24h(d.accidents || [])
+            }
+        } catch (e) {
+            console.error("Error fetching accidents:", e)
+        } finally {
+            setLoadingAccidents(false)
+        }
+    }
+
     // Fetch invitations
     const fetchInvitations = async () => {
         if (!session?.user?.accessToken || !organizationId) return
@@ -213,6 +283,7 @@ export default function OrganizationDetailPage() {
             fetchOrganization()
             fetchVehicles()
             fetchInvitations()
+            fetchAccidents()
         }
     }, [session?.user?.accessToken, organizationId])
 
@@ -577,6 +648,19 @@ export default function OrganizationDetailPage() {
             {/* Tabs */}
             <div className="flex gap-2 border-b">
                 <button
+                    onClick={() => setActiveTab("overview")}
+                    className={`px-4 py-2 font-medium transition-colors ${
+                        activeTab === "overview"
+                            ? "border-b-2 border-primary text-primary"
+                            : "text-muted-foreground hover:text-foreground"
+                    }`}
+                >
+                    <div className="flex items-center gap-2">
+                        <LayoutDashboard className="h-4 w-4" />
+                        Overview
+                    </div>
+                </button>
+                <button
                     onClick={() => setActiveTab("vehicles")}
                     className={`px-4 py-2 font-medium transition-colors ${
                         activeTab === "vehicles"
@@ -603,6 +687,310 @@ export default function OrganizationDetailPage() {
                     </div>
                 </button>
             </div>
+
+            {/* Overview tab: map left, metrics + accident + charts + vehicles right */}
+            {activeTab === "overview" && (
+                <div className="flex flex-col lg:flex-row gap-4 h-[calc(100vh-220px)] min-h-[500px]">
+                    {/* Map - left */}
+                    <div className="flex-1 min-w-0 rounded-lg border overflow-hidden bg-muted/30 relative">
+                        {loadingAccidents ? (
+                            <div className="h-full flex items-center justify-center text-muted-foreground">Loading map...</div>
+                        ) : (
+                            <OverviewMap
+                                accidents={accidents}
+                                center={
+                                    accidents.length > 0
+                                        ? [accidents[0].latitude, accidents[0].longitude]
+                                        : [27.7172, 85.324]
+                                }
+                                className="h-full w-full"
+                            />
+                        )}
+                        <div className="absolute top-2 left-2 z-[1000] text-xs text-muted-foreground bg-background/90 px-2 py-1 rounded shadow-sm">
+                            Incident locations · {organization?.address || "—"}
+                        </div>
+                        <Button
+                            variant="secondary"
+                            size="sm"
+                            className="absolute bottom-2 right-2 z-[1000]"
+                            onClick={() => router.push(`/dashboard/${organizationId}/map`)}
+                        >
+                            <Map className="h-4 w-4 mr-1" />
+                            Live Map
+                        </Button>
+                    </div>
+
+                    {/* Right column: metrics, accident card, charts, vehicle list */}
+                    <div className="w-full lg:w-[420px] xl:w-[480px] flex-shrink-0 overflow-y-auto space-y-4 pr-2">
+                        {/* Summary cards – org, drivers, vehicles, accidents only */}
+                        <div>
+                            <h3 className="text-sm font-semibold mb-2 text-muted-foreground">Organization summary</h3>
+                            <div className="grid grid-cols-2 gap-2">
+                                <Card className="py-3 px-4">
+                                    <CardContent className="p-0 flex items-center gap-3">
+                                        <div className="h-9 w-9 rounded-lg bg-destructive/10 flex items-center justify-center">
+                                            <AlertTriangle className="h-4 w-4 text-destructive" />
+                                        </div>
+                                        <div>
+                                            <p className="text-xs text-muted-foreground">Accidents (24h)</p>
+                                            <p className="text-lg font-semibold">{accidentsLast24h.length}</p>
+                                        </div>
+                                    </CardContent>
+                                </Card>
+                                <Card className="py-3 px-4">
+                                    <CardContent className="p-0 flex items-center gap-3">
+                                        <div className="h-9 w-9 rounded-lg bg-primary/10 flex items-center justify-center">
+                                            <Car className="h-4 w-4 text-primary" />
+                                        </div>
+                                        <div>
+                                            <p className="text-xs text-muted-foreground">Vehicles</p>
+                                            <p className="text-lg font-semibold">{vehicles.length}</p>
+                                        </div>
+                                    </CardContent>
+                                </Card>
+                                <Card className="py-3 px-4">
+                                    <CardContent className="p-0 flex items-center gap-3">
+                                        <div className="h-9 w-9 rounded-lg bg-blue-500/10 flex items-center justify-center">
+                                            <UserCog className="h-4 w-4 text-blue-500" />
+                                        </div>
+                                        <div>
+                                            <p className="text-xs text-muted-foreground">Drivers</p>
+                                            <p className="text-lg font-semibold">{drivers.length}</p>
+                                        </div>
+                                    </CardContent>
+                                </Card>
+                                <Card className="py-3 px-4">
+                                    <CardContent className="p-0 flex items-center gap-3">
+                                        <div className="h-9 w-9 rounded-lg bg-muted flex items-center justify-center">
+                                            <Users className="h-4 w-4 text-muted-foreground" />
+                                        </div>
+                                        <div>
+                                            <p className="text-xs text-muted-foreground">Team</p>
+                                            <p className="text-lg font-semibold">{organization?.members?.length ?? 0}</p>
+                                        </div>
+                                    </CardContent>
+                                </Card>
+                                <Card className="py-3 px-4">
+                                    <CardContent className="p-0 flex items-center gap-3">
+                                        <div className="h-9 w-9 rounded-lg bg-amber-500/10 flex items-center justify-center">
+                                            <FileWarning className="h-4 w-4 text-amber-500" />
+                                        </div>
+                                        <div>
+                                            <p className="text-xs text-muted-foreground">Open incidents</p>
+                                            <p className="text-lg font-semibold">{accidents.filter((a) => a.status !== "RESOLVED").length}</p>
+                                        </div>
+                                    </CardContent>
+                                </Card>
+                                <Card className="py-3 px-4">
+                                    <CardContent className="p-0 flex items-center gap-3">
+                                        <div className="h-9 w-9 rounded-lg bg-emerald-500/10 flex items-center justify-center">
+                                            <CheckCircle className="h-4 w-4 text-emerald-600" />
+                                        </div>
+                                        <div>
+                                            <p className="text-xs text-muted-foreground">Resolved</p>
+                                            <p className="text-lg font-semibold">{accidents.filter((a) => a.status === "RESOLVED").length}</p>
+                                        </div>
+                                    </CardContent>
+                                </Card>
+                            </div>
+                        </div>
+
+                        {/* Latest accident (last 24h) – from accident logs */}
+                        {accidentsLast24h.length > 0 && (
+                            <Card>
+                                <CardHeader className="pb-2">
+                                    <CardTitle className="text-base flex items-center gap-2">
+                                        <AlertTriangle className="h-4 w-4 text-destructive" />
+                                        Latest incident (24h)
+                                    </CardTitle>
+                                    <CardDescription>From accident logs</CardDescription>
+                                </CardHeader>
+                                <CardContent className="space-y-3">
+                                    <div className="flex gap-2" title="Severity indicator">
+                                        {[1, 2, 3, 4].map((i) => (
+                                            <div
+                                                key={i}
+                                                className={`h-1.5 flex-1 rounded ${
+                                                    i <= 3 ? "bg-orange-500" : "bg-muted"
+                                                }`}
+                                            />
+                                        ))}
+                                    </div>
+                                    <p className="text-sm">
+                                        {accidentsLast24h[0].description ||
+                                            `${accidentsLast24h[0].title}. Occurred at ${new Date(accidentsLast24h[0].occurredAt).toLocaleString()}.`}
+                                    </p>
+                                    <ul className="text-xs space-y-1 text-muted-foreground">
+                                        <li>Vehicle: {accidentsLast24h[0].vehicle?.vehicleNumber || "—"} ({accidentsLast24h[0].vehicle?.vehicleType || "—"})</li>
+                                        <li>Status: {accidentsLast24h[0].status}</li>
+                                        <li>Time: {new Date(accidentsLast24h[0].occurredAt).toLocaleString()}</li>
+                                    </ul>
+                                </CardContent>
+                            </Card>
+                        )}
+
+                        {/* Number of vehicles in this org */}
+                        <Card>
+                            <CardHeader className="pb-2">
+                                <CardTitle className="text-base">Vehicles</CardTitle>
+                                <CardDescription>Number of vehicles in this organization</CardDescription>
+                            </CardHeader>
+                            <CardContent>
+                                <div className="h-[140px]">
+                                    <ResponsiveContainer width="100%" height="100%">
+                                        <AreaChart
+                                            data={[
+                                                ...Array.from({ length: 8 }, (_, i) => ({
+                                                    time: `${i * 3}:00`,
+                                                    vehicles: Math.min(vehicles.length, Math.round(vehicles.length * (0.6 + 0.4 * Math.sin(i * 0.8)))),
+                                                    avg: Math.round(vehicles.length * 0.85),
+                                                })),
+                                            ]}
+                                        >
+                                            <defs>
+                                                <linearGradient id="vehicleGradient" x1="0" y1="0" x2="0" y2="1">
+                                                    <stop offset="0%" stopColor="hsl(var(--primary))" stopOpacity={0.3} />
+                                                    <stop offset="100%" stopColor="hsl(var(--primary))" stopOpacity={0} />
+                                                </linearGradient>
+                                            </defs>
+                                            <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                                            <XAxis dataKey="time" tick={{ fontSize: 10 }} />
+                                            <YAxis tick={{ fontSize: 10 }} allowDecimals={false} />
+                                            <Tooltip contentStyle={{ fontSize: 12 }} />
+                                            <Area
+                                                type="monotone"
+                                                dataKey="vehicles"
+                                                stroke="hsl(var(--primary))"
+                                                fill="url(#vehicleGradient)"
+                                                strokeWidth={2}
+                                            />
+                                        </AreaChart>
+                                    </ResponsiveContainer>
+                                </div>
+                                <p className="text-center text-2xl font-semibold mt-2">{vehicles.length} vehicles</p>
+                            </CardContent>
+                        </Card>
+
+                        {/* Incident status – Reported / Confirmed / Resolved */}
+                        {accidents.length > 0 && (
+                            <Card>
+                                <CardHeader className="pb-2">
+                                    <CardTitle className="text-base">Incident status</CardTitle>
+                                    <CardDescription>All accidents in this organization</CardDescription>
+                                </CardHeader>
+                                <CardContent>
+                                    <div className="h-[100px]">
+                                        <ResponsiveContainer width="100%" height="100%">
+                                            <BarChart
+                                                data={[
+                                                    { status: "Reported", count: accidents.filter((a) => a.status === "REPORTED").length },
+                                                    { status: "Confirmed", count: accidents.filter((a) => a.status === "CONFIRMED").length },
+                                                    { status: "Resolved", count: accidents.filter((a) => a.status === "RESOLVED").length },
+                                                ]}
+                                                layout="vertical"
+                                                margin={{ top: 0, right: 8, left: 50, bottom: 0 }}
+                                            >
+                                                <CartesianGrid strokeDasharray="3 3" className="stroke-muted" horizontal={false} />
+                                                <XAxis type="number" tick={{ fontSize: 10 }} allowDecimals={false} />
+                                                <YAxis type="category" dataKey="status" tick={{ fontSize: 10 }} width={52} />
+                                                <Tooltip contentStyle={{ fontSize: 12 }} />
+                                                <Bar dataKey="count" fill="hsl(var(--primary))" radius={[0, 4, 4, 0]} />
+                                            </BarChart>
+                                        </ResponsiveContainer>
+                                    </div>
+                                </CardContent>
+                            </Card>
+                        )}
+
+                        {/* Accident events – from accident logs */}
+                        <Card>
+                            <CardHeader className="pb-2">
+                                <CardTitle className="text-base">Accidents (24h)</CardTitle>
+                                <CardDescription>Incidents by 3‑hour window (from accident logs)</CardDescription>
+                            </CardHeader>
+                            <CardContent>
+                                <div className="h-[120px]">
+                                    <ResponsiveContainer width="100%" height="100%">
+                                        <LineChart
+                                            data={(() => {
+                                                const now = Date.now()
+                                                return Array.from({ length: 8 }, (_, i) => {
+                                                    const start = now - (8 - i) * 3 * 60 * 60 * 1000
+                                                    const end = start + 3 * 60 * 60 * 1000
+                                                    const count = accidentsLast24h.filter(
+                                                        (a) =>
+                                                            new Date(a.occurredAt).getTime() >= start &&
+                                                            new Date(a.occurredAt).getTime() < end
+                                                    ).length
+                                                    return { hour: `${i * 3}h`, accidents: count }
+                                                })
+                                            })()}
+                                        >
+                                            <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                                            <XAxis dataKey="hour" tick={{ fontSize: 10 }} />
+                                            <YAxis tick={{ fontSize: 10 }} allowDecimals={false} />
+                                            <Tooltip contentStyle={{ fontSize: 12 }} />
+                                            <Line
+                                                type="monotone"
+                                                dataKey="accidents"
+                                                stroke="hsl(var(--destructive))"
+                                                strokeWidth={2}
+                                                dot={{ r: 3 }}
+                                            />
+                                        </LineChart>
+                                    </ResponsiveContainer>
+                                </div>
+                            </CardContent>
+                        </Card>
+
+                        {/* All vehicles in this org */}
+                        <Card>
+                            <CardHeader className="pb-2">
+                                <CardTitle className="text-base flex items-center justify-between">
+                                    <span>All vehicles</span>
+                                    <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        onClick={() => setActiveTab("vehicles")}
+                                    >
+                                        View all
+                                    </Button>
+                                </CardTitle>
+                                <CardDescription>Vehicles and their assigned drivers</CardDescription>
+                            </CardHeader>
+                            <CardContent>
+                                {loadingVehicles ? (
+                                    <p className="text-sm text-muted-foreground">Loading...</p>
+                                ) : vehicles.length === 0 ? (
+                                    <p className="text-sm text-muted-foreground">No vehicles</p>
+                                ) : (
+                                    <div className="space-y-2 max-h-[220px] overflow-y-auto">
+                                        {vehicles.map((v) => (
+                                            <div
+                                                key={v.id}
+                                                className="flex items-center justify-between py-2 px-3 rounded-lg border bg-muted/30 text-sm"
+                                            >
+                                                <div className="flex items-center gap-2">
+                                                    <span className="text-lg">
+                                                        {v.vehicleType === "CAR" ? "🚗" : v.vehicleType === "MOTORCYCLE" ? "🏍️" : v.vehicleType === "TRUCK" ? "🚚" : "🚌"}
+                                                    </span>
+                                                    <div>
+                                                        <p className="font-medium">{v.vehicleNumber}</p>
+                                                        <p className="text-xs text-muted-foreground">
+                                                            {v.driver.fullName || v.driver.phoneNumber}
+                                                        </p>
+                                                    </div>
+                                                </div>
+                                                <span className="text-xs text-muted-foreground">{v.vehicleType}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </CardContent>
+                        </Card>
+                    </div>
+                </div>
+            )}
 
             {/* Content based on active tab */}
             {activeTab === "vehicles" && (
