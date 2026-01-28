@@ -9,10 +9,34 @@ import {
     SelectTrigger,
     SelectValue,
 } from "@/core/components/ui/select"
-import { Plus, Building2, MapPin, Phone, Users, Car, AlertTriangle, Map } from "lucide-react"
+import { 
+    Plus, 
+    Building2, 
+    MapPin, 
+    Phone, 
+    Users, 
+    Car, 
+    AlertTriangle, 
+    Map,
+    Activity,
+    Shield,
+    TrendingUp,
+    Clock,
+    CheckCircle2,
+    XCircle,
+    Bell
+} from "lucide-react"
 import { useSession } from "next-auth/react"
 import { useState, useEffect } from "react"
 import { useRouter } from "next/navigation"
+import { toast } from "sonner"
+import {
+    Card,
+    CardContent,
+    CardDescription,
+    CardHeader,
+    CardTitle,
+} from "@/core/components/ui/card"
 import {
     Dialog,
     DialogContent,
@@ -21,7 +45,6 @@ import {
     DialogTitle,
     DialogTrigger,
 } from "@/core/components/ui/dialog"
-import { toast } from "sonner"
 
 interface Organization {
     id: string

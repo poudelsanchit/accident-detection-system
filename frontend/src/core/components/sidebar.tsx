@@ -31,15 +31,15 @@ export function Sidebar() {
     }
 
     return (
-        <div className="flex flex-col h-screen w-64 border-r bg-card">
+        <div className="flex flex-col h-screen w-64 border-r bg-sidebar border-sidebar-border">
             {/* User Info */}
-            <div className="p-4 border-b">
+            <div className="p-4 border-b border-sidebar-border bg-white">
                 <div className="flex items-center gap-3">
                     <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center">
                         <User className="h-5 w-5 text-primary" />
                     </div>
                     <div className="flex-1 min-w-0">
-                        <p className="font-semibold text-sm truncate">
+                        <p className="font-semibold text-sm truncate text-sidebar-foreground">
                             {session?.user?.name || "User"}
                         </p>
                         <p className="text-xs text-muted-foreground truncate">
@@ -53,8 +53,12 @@ export function Sidebar() {
             <nav className="flex-1 p-4 space-y-2">
                 <Link href="/dashboard">
                     <Button
-                        variant={isActive("/dashboard") ? "secondary" : "ghost"}
-                        className="w-full justify-start"
+                        variant={isActive("/dashboard") ? "default" : "ghost"}
+                        className={`w-full justify-start ${
+                            isActive("/dashboard") 
+                                ? "bg-primary text-primary-foreground hover:bg-primary/90" 
+                                : "hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+                        }`}
                     >
                         <LayoutDashboard className="mr-2 h-4 w-4" />
                         Dashboard
@@ -62,8 +66,12 @@ export function Sidebar() {
                 </Link>
                 <Link href="/dashboard/inbox">
                     <Button
-                        variant={isActive("/dashboard/inbox") ? "secondary" : "ghost"}
-                        className="w-full justify-start"
+                        variant={isActive("/dashboard/inbox") ? "default" : "ghost"}
+                        className={`w-full justify-start ${
+                            isActive("/dashboard/inbox") 
+                                ? "bg-primary text-primary-foreground hover:bg-primary/90" 
+                                : "hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+                        }`}
                     >
                         <Inbox className="mr-2 h-4 w-4" />
                         Inbox
@@ -72,10 +80,10 @@ export function Sidebar() {
             </nav>
 
             {/* Logout */}
-            <div className="p-4 border-t">
+            <div className="p-4 border-t border-sidebar-border bg-white">
                 <Button
                     variant="ghost"
-                    className="w-full justify-start text-destructive hover:text-destructive"
+                    className="w-full justify-start text-primary hover:text-primary hover:bg-primary/10"
                     onClick={handleLogout}
                 >
                     <LogOut className="mr-2 h-4 w-4" />
