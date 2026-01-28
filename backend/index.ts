@@ -4,6 +4,7 @@ import cors from "cors"
 import authRouter from "./routes/auth"
 import organizationRouter from "./routes/organization"
 import vehicleRouter from "./routes/vehicle"
+import accidentRouter from "./routes/accident"
 import { authMiddleware } from "./middleware/authMiddleware"
 import invitationRouter from "./routes/invitation"
 import { WebSocket, WebSocketServer } from "ws"
@@ -20,6 +21,7 @@ app.use("/api/auth", authRouter)
 app.use("/api/organization", authMiddleware, organizationRouter)
 app.use("/api/vehicle", authMiddleware, vehicleRouter)
 app.use("/api/invitation", authMiddleware, invitationRouter)
+app.use("/api/accident", authMiddleware, accidentRouter)
 
 const httpServer = app.listen(3000, () => {
   console.log("Server is running on port 3000")
@@ -409,6 +411,13 @@ wss.on("connection", (ws) => {
               viewer.ws.send(JSON.stringify(payload))
             }
           })
+          
+          // Send accident alert to all drivers in the organization (including the driver involved)
+          drivers.forEach((driver) => {
+            if (driver.organizationId === parsedData.organizationId) {
+              driver.ws.send(JSON.stringify(payload))
+            }
+          })
         } catch (error) {
           console.error("❌ ACCIDENT - Failed to create record:", error)
           
@@ -431,6 +440,13 @@ wss.on("connection", (ws) => {
           viewers.forEach((viewer) => {
             if (viewer.organizationId === parsedData.organizationId) {
               viewer.ws.send(JSON.stringify(payload))
+            }
+          })
+          
+          // Send to drivers as well
+          drivers.forEach((driver) => {
+            if (driver.organizationId === parsedData.organizationId) {
+              driver.ws.send(JSON.stringify(payload))
             }
           })
         }

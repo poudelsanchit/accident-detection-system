@@ -1,6 +1,7 @@
 import type { Request, Response } from "express"
 import { prisma } from "../config/prismaClient"
 import { createAccidentSchema, updateAccidentSchema } from "../schemas/accident"
+import { sendAccidentAlert } from "../config/twilio"
 
 export const createAccident = async (req: Request, res: Response) => {
     try{
@@ -182,6 +183,53 @@ export const deleteAccident = async (req: Request, res: Response) => {
         
         return res.status(200).json({ 
             message: "Accident deleted successfully" 
+        })
+    }catch(err:any){
+        console.error(err.message)
+        return res.status(500).json({ message: "Internal server error" })
+    }
+}
+
+export const resolveAccident = async (req: Request, res: Response) => {
+    try{
+        const { id } = req.params
+        const accidentId = Array.isArray(id) ? id[0] : id
+        
+        if (!accidentId) {
+            return res.status(400).json({ message: "Accident ID is required" })
+        }
+        
+        // Fetch accident with related data
+        const accident = await prisma.accident.findUnique({
+            where: { id: accidentId },
+            include: {
+                vehicle: {
+                    include: {
+                        driver: true
+                    }
+                },
+                organization: true
+            }
+        })
+        
+        if (!accident) {
+            return res.status(404).json({ message: "Accident not found" })
+        }
+        
+        // Update accident status to RESOLVED
+        const updatedAccident = await prisma.accident.update({
+            where: { id: accidentId },
+            data: { status: "RESOLVED" },
+            include: {
+                vehicle: true,
+                organization: true
+            }
+        })
+     
+        
+        return res.status(200).json({ 
+            message: "Accident resolved successfully", 
+            accident: updatedAccident 
         })
     }catch(err:any){
         console.error(err.message)

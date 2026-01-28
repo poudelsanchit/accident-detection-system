@@ -67,6 +67,7 @@ import {
 } from "recharts"
 import { OverviewMap } from "./OverviewMap"
 import { AccidentAlert } from "@/core/components/accident-alert"
+import { DriverSafetyDialog } from "@/core/components/driver-safety-dialog"
 
 interface Accident {
     id: string
@@ -179,6 +180,10 @@ export default function OrganizationDetailPage() {
         latitude: number
         longitude: number
     } | null>(null)
+    
+    // Driver safety dialog state (only for drivers)
+    const [driverSafetyDialogVisible, setDriverSafetyDialogVisible] = useState(false)
+    const [currentAccidentId, setCurrentAccidentId] = useState<string | null>(null)
     
     // Vehicle tracking state for map
     interface VehicleData {
@@ -362,6 +367,38 @@ export default function OrganizationDetailPage() {
         }
     }
 
+    // Handle driver confirming they are safe (resolve accident)
+    const handleDriverConfirmSafe = async (accidentId: string) => {
+        if (!session?.user?.accessToken) return
+
+        try {
+            const response = await fetch(
+                `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/accident/${accidentId}/resolve`,
+                {
+                    method: "POST",
+                    headers: {
+                        Authorization: session.user.accessToken,
+                        "Content-Type": "application/json",
+                    },
+                }
+            )
+
+            if (response.ok) {
+                toast.success("Accident marked as resolved. Notifications sent to your organization.")
+                setDriverSafetyDialogVisible(false)
+                setCurrentAccidentId(null)
+                // Refresh accidents list
+                fetchAccidents()
+            } else {
+                const errorData = await response.json()
+                toast.error(errorData.message || "Failed to resolve accident")
+            }
+        } catch (error) {
+            console.error("Error resolving accident:", error)
+            toast.error("An error occurred while resolving the accident")
+        }
+    }
+
     useEffect(() => {
         if (session?.user?.accessToken && organizationId) {
             fetchOrganization()
@@ -538,16 +575,41 @@ export default function OrganizationDetailPage() {
                             return newMap
                         })
                         
-                        // Show accident alert popover
-                        setAccidentAlertData({
-                            vehicleId: data.data.vehicleId,
-                            vehicleName: `${data.data.driverName} - ${data.data.vehicleType}`,
-                            location: `${data.data.location.latitude.toFixed(6)}, ${data.data.location.longitude.toFixed(6)}`,
-                            timestamp: new Date(data.data.timestamp),
-                            latitude: data.data.location.latitude,
-                            longitude: data.data.location.longitude,
+                        // Check if this accident is for the current driver
+                        const isMyAccident = organization?.myRole === "DRIVER" && 
+                                            data.data.vehicleId === driverVehicleRef.current?.id
+                        
+                        console.log("🔍 Accident check:", {
+                            myRole: organization?.myRole,
+                            accidentVehicleId: data.data.vehicleId,
+                            myVehicleId: driverVehicleRef.current?.id,
+                            isMyAccident,
+                            hasAccidentId: !!data.data.accidentId
                         })
-                        setAccidentAlertVisible(true)
+                        
+                        if (isMyAccident && data.data.accidentId) {
+                            console.log("✅ Showing driver safety dialog for accident:", data.data.accidentId)
+                            // Show driver safety dialog for the driver involved (ONLY this, not the alert)
+                            setCurrentAccidentId(data.data.accidentId)
+                            setDriverSafetyDialogVisible(true)
+                            
+                            // Auto-dismiss after 10 seconds
+                            setTimeout(() => {
+                                setDriverSafetyDialogVisible(false)
+                                setCurrentAccidentId(null)
+                            }, 10000)
+                        } else {
+                            // Show accident alert only for viewers/admins or other drivers
+                            setAccidentAlertData({
+                                vehicleId: data.data.vehicleId,
+                                vehicleName: `${data.data.driverName} - ${data.data.vehicleType}`,
+                                location: `${data.data.location.latitude.toFixed(6)}, ${data.data.location.longitude.toFixed(6)}`,
+                                timestamp: new Date(data.data.timestamp),
+                                latitude: data.data.location.latitude,
+                                longitude: data.data.location.longitude,
+                            })
+                            setAccidentAlertVisible(true)
+                        }
                     }
                 } catch (error) {
                     console.error("Error parsing WebSocket message:", error)
@@ -1224,7 +1286,7 @@ export default function OrganizationDetailPage() {
 
     return (
         <div className="flex p-4 flex-col gap-6">
-            {/* Accident Alert Popover */}
+            {/* Accident Alert Popover (for viewers/admins) */}
             <AccidentAlert
                 isVisible={accidentAlertVisible}
                 vehicleId={accidentAlertData?.vehicleId}
@@ -1248,6 +1310,17 @@ export default function OrganizationDetailPage() {
                 }}
                 onAcknowledge={() => {
                     setAccidentAlertVisible(false)
+                }}
+            />
+
+            {/* Driver Safety Dialog (only for drivers) */}
+            <DriverSafetyDialog
+                isVisible={driverSafetyDialogVisible && organization?.myRole === "DRIVER"}
+                accidentId={currentAccidentId || ""}
+                onConfirmSafe={handleDriverConfirmSafe}
+                onClose={() => {
+                    setDriverSafetyDialogVisible(false)
+                    setCurrentAccidentId(null)
                 }}
             />
             
