@@ -78,13 +78,13 @@ const ACCIDENT_COOLDOWN = 10_000
 
 const THRESHOLDS: Record<
   VehicleType,
-  { g: number; gyro: number; deltaV: number }
+  { g: number; gyro: number }
 > = {
-  MOTORCYCLE: { g: 0.1, gyro: 200, deltaV: 30 },
-  CAR: { g: 0.1, gyro: 250, deltaV: 45 },
-  TRUCK: { g: 6.5, gyro: 350, deltaV: 60 },
-  BUS: { g: 6.5, gyro: 350, deltaV: 60 },
-  OTHER: { g: 4.5, gyro: 275, deltaV: 45 },
+  MOTORCYCLE: { g: 0.1, gyro: 200 },
+  CAR: { g: 0.1, gyro: 250 },
+  TRUCK: { g: 6.5, gyro: 350 },
+  BUS: { g: 6.5, gyro: 350 },
+  OTHER: { g: 4.5, gyro: 275 },
 }
 
 /* ===================== HELPERS ===================== */
@@ -286,7 +286,6 @@ wss.on("connection", (ws) => {
       /* ================= GPS → SPEED ================= */
 
       let speedKmh = 0
-      let deltaV = 0
 
       if (gpsHistory[vehicleId]) {
         const prev = gpsHistory[vehicleId]
@@ -300,7 +299,6 @@ wss.on("connection", (ws) => {
             longitude
           )
           speedKmh = (distance / dt) * 3.6
-          deltaV = prev.speed - speedKmh
         }
       }
 
@@ -337,11 +335,10 @@ wss.on("connection", (ws) => {
       
       // Check if threshold-based detection triggers
       const thresholdExceeded = 
-        gValue >= t.g ||
-        (gyroValue >= t.gyro || deltaV >= t.deltaV)
+        gValue >= t.g || gyroValue >= t.gyro
       
       if (!thresholdExceeded) {
-        console.log(`✅ NO ACCIDENT,latitude: ${latitude} and longitude : ${longitude}`)
+        console.log(`✅ NO ACCIDENT, latitude: ${latitude} and longitude: ${longitude}`)
         return
       }
       
@@ -357,10 +354,9 @@ wss.on("connection", (ws) => {
         const causes = []
         if (gValue >= t.g) causes.push(`G-Force: ${gValue.toFixed(2)}g (threshold: ${t.g}g)`)
         if (gyroValue >= t.gyro) causes.push(`Gyroscope: ${gyroValue.toFixed(2)} deg/s (threshold: ${t.gyro})`)
-        if (deltaV >= t.deltaV) causes.push(`Delta-V: ${deltaV.toFixed(2)} km/h (threshold: ${t.deltaV} km/h)`)
 
         console.log("🚨 ACCIDENT - Cause:", causes.join(", "))
-        console.log("gValue"+gValue.toFixed(2))
+        console.log("gValue: " + gValue.toFixed(2))
         // Update last accident time
         lastAccidentTime[vehicleId] = now
 
@@ -374,7 +370,7 @@ wss.on("connection", (ws) => {
             latitude,
             longitude,
             speedKmh,
-            deltaV,
+            0, // deltaV removed
             gValue,
             gyroValue,
             now
@@ -400,7 +396,6 @@ wss.on("connection", (ws) => {
               vehicleType,
               location: { latitude, longitude },
               speed: Number(speedKmh.toFixed(2)),
-              deltaV: Number(deltaV.toFixed(2)),
               gValue: Number(gValue.toFixed(2)),
               gyroValue: Number(gyroValue.toFixed(2)),
               accidentId: accident.id,
@@ -427,7 +422,6 @@ wss.on("connection", (ws) => {
               vehicleType,
               location: { latitude, longitude },
               speed: Number(speedKmh.toFixed(2)),
-              deltaV: Number(deltaV.toFixed(2)),
               gValue: Number(gValue.toFixed(2)),
               gyroValue: Number(gyroValue.toFixed(2)),
               timestamp: now,
