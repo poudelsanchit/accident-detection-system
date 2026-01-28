@@ -117,11 +117,37 @@ export default function SignupForm() {
     }
 
     return (
-        <div className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-background to-muted/20">
-            <Card className="w-full max-w-md shadow-lg">
-                <CardHeader className="space-y-1 text-center">
-                    <CardTitle className="text-2xl font-bold">Create an account</CardTitle>
-                    <CardDescription>
+        <div className="min-h-screen flex items-center justify-center p-4 relative overflow-hidden">
+            {/* Background with image and overlay */}
+            <div className="absolute inset-0 -z-10">
+                <div 
+                    className="absolute inset-0 bg-cover bg-center bg-no-repeat"
+                    style={{
+                        backgroundImage: `url('https://images.unsplash.com/photo-1449965408869-eaa3f722e40d?q=80&w=2070&auto=format&fit=crop')`,
+                    }}
+                />
+                <div className="absolute inset-0 bg-gradient-to-br from-white/95 via-gray-50/95 to-white/95" />
+                <div className="absolute inset-0">
+                    <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-red-100/40 rounded-full filter blur-[120px]"></div>
+                    <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-amber-100/30 rounded-full filter blur-[120px]"></div>
+                </div>
+            </div>
+
+            <Card className="w-full max-w-md shadow-2xl border-gray-200 bg-white/80 backdrop-blur-xl">
+                <CardHeader className="space-y-3 text-center">
+                    {/* Logo */}
+                    <div className="flex justify-center mb-2">
+                        <div className="flex items-center gap-3">
+                            <div className="w-10 h-10 bg-gradient-to-br from-red-600 to-red-700 rounded-lg flex items-center justify-center shadow-lg">
+                                <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                                </svg>
+                            </div>
+                            <span className="font-bold text-xl text-gray-900">SafeDetect</span>
+                        </div>
+                    </div>
+                    <CardTitle className="text-3xl font-bold text-gray-900">Create an account</CardTitle>
+                    <CardDescription className="text-gray-600">
                         Enter your details to sign up
                     </CardDescription>
                 </CardHeader>
@@ -255,15 +281,15 @@ export default function SignupForm() {
                             <Button
                                 type="submit"
                                 form="signup-form"
-                                className="flex-1"
+                                className="flex-1 bg-gradient-to-r from-red-600 to-red-700 hover:from-red-700 hover:to-red-800 text-white shadow-lg hover:shadow-xl transition-all"
                                 disabled={isLoading}
                             >
                                 {isLoading ? "Creating account..." : "Sign Up"}
                             </Button>
                         </div>
-                        <div className="text-sm text-muted-foreground">
+                        <div className="text-sm text-gray-600 text-center">
                             Already have an account?
-                            <Link href={'/auth/login'} className="text-primary"> Sign in</Link>
+                            <Link href={'/auth/login'} className="text-red-600 hover:text-red-700 font-semibold ml-1">Sign in</Link>
                         </div>
                     </form>
                 </CardContent>

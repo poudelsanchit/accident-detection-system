@@ -145,12 +145,11 @@ const Benefits = () => {
           className="bg-linear-to-r from-red-50 via-white to-red-50 rounded-3xl p-12 border border-red-200 shadow-xl backdrop-blur-xl"
         >
           <h3 className="text-3xl font-black text-gray-900 mb-10 text-center">Technology Stack</h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {[
               { label: 'AI/ML', desc: 'Advanced neural networks', icon: '🧠' },
               { label: 'IoT Sensors', desc: 'Real-time data collection', icon: '📡' },
               { label: 'GPS', desc: 'Precise location tracking', icon: '🗺️' },
-              { label: 'Cloud', desc: '99.99% uptime SLA', icon: '☁️' },
             ].map((tech, index) => (
               <motion.div
                 key={index}
