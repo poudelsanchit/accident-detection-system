@@ -7,6 +7,7 @@ import vehicleRouter from "./routes/vehicle"
 import { authMiddleware } from "./middleware/authMiddleware"
 import invitationRouter from "./routes/invitation"
 import { WebSocket, WebSocketServer } from "ws"
+import { prisma } from "./config/prismaClient"
 
 const app = express()
 
@@ -70,10 +71,7 @@ const gpsHistory: Record<
 const lastAccidentTime: Record<string, number> = {}
 const ACCIDENT_COOLDOWN = 10_000
 
-/* ===================== FASTAPI CONFIG ===================== */
-
-const FASTAPI_URL = process.env.FASTAPI_URL || "http://localhost:8000"
-const ACCIDENT_PROBABILITY_THRESHOLD = 0.5 // Only alert if probability >= 50%
+/* ===================== ACCIDENT CONFIG ===================== */
 
 /* ===================== THRESHOLDS ===================== */
 
@@ -82,7 +80,7 @@ const THRESHOLDS: Record<
   { g: number; gyro: number; deltaV: number }
 > = {
   MOTORCYCLE: { g: 3.0, gyro: 200, deltaV: 30 },
-  CAR: { g: 0.5, gyro: 250, deltaV: 45 },
+  CAR: { g: 0.1, gyro: 250, deltaV: 45 },
   TRUCK: { g: 6.5, gyro: 350, deltaV: 60 },
   BUS: { g: 6.5, gyro: 350, deltaV: 60 },
   OTHER: { g: 4.5, gyro: 275, deltaV: 45 },
@@ -115,64 +113,45 @@ function isValidVehicleType(value: any): value is VehicleType {
   return Object.values(VehicleType).includes(value)
 }
 
-/* ===================== FASTAPI PREDICTION ===================== */
-
-interface FastAPIPredictionRequest {
-  accelX: number
-  accelY: number
-  accelZ: number
-  gyroX: number
-  gyroY: number
-  gyroZ: number
-}
-
-interface FastAPIPredictionResponse {
-  prediction: number // 0 = No Accident, 1 = Accident
-  probability: number // Probability of accident (0.0 to 1.0)
-  confidence: string // "Low" | "Medium" | "High"
-}
+/* ===================== ACCIDENT CREATION ===================== */
 
 /**
- * Call FastAPI server to predict if sensor data indicates an accident
+ * Create accident record in database
  */
-async function predictAccident(
-  accelX: number,
-  accelY: number,
-  accelZ: number,
-  gyroX: number,
-  gyroY: number,
-  gyroZ: number
-): Promise<FastAPIPredictionResponse | null> {
+async function createAccidentRecord(
+  organizationId: string,
+  vehicleId: string,
+  driverName: string,
+  vehicleType: string,
+  latitude: number,
+  longitude: number,
+  speed: number,
+  deltaV: number,
+  gValue: number,
+  gyroValue: number,
+  timestamp: number
+) {
   try {
-    const requestBody: FastAPIPredictionRequest = {
-      accelX,
-      accelY,
-      accelZ,
-      gyroX,
-      gyroY,
-      gyroZ,
-    }
-
-    const response = await fetch(`${FASTAPI_URL}/predict`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
+    const accident = await prisma.accident.create({
+      data: {
+        title: `Accident Detected - ${vehicleType}`,
+        description: `Accident detected for vehicle. Speed: ${speed.toFixed(2)} km/h, G-Force: ${gValue.toFixed(2)}g, Gyro: ${gyroValue.toFixed(2)} deg/s`,
+        latitude,
+        longitude,
+        occurredAt: new Date(timestamp),
+        status: "REPORTED",
+        vehicleId,
+        organizationId,
       },
-      body: JSON.stringify(requestBody),
+      include: {
+        vehicle: true,
+        organization: true,
+      },
     })
-
-    if (!response.ok) {
-      console.error(
-        `FastAPI prediction failed: ${response.status} ${response.statusText}`
-      )
-      return null
-    }
-
-    const data = (await response.json()) as FastAPIPredictionResponse
-    return data
+    return accident
   } catch (error) {
-    console.error("Error calling FastAPI prediction:", error)
-    return null
+    console.error("Error creating accident record:", error)
+    throw error
   }
 }
 
@@ -299,84 +278,100 @@ wss.on("connection", (ws) => {
       /* ================= ACCIDENT LOGIC ================= */
       
       // Check if threshold-based detection triggers
-      if (
+      const thresholdExceeded = 
         gValue >= t.g ||
         (gyroValue >= t.gyro || deltaV >= t.deltaV)
-      ) {
-        // Check cooldown to prevent spam
-        lastAccidentTime[vehicleId] ??= 0
-        if (now - lastAccidentTime[vehicleId] < ACCIDENT_COOLDOWN) {
-          return // Still in cooldown period
+      
+      if (!thresholdExceeded) {
+        console.log(`✅ NO ACCIDENT,latitude: ${latitude} and longitude : ${longitude}`)
+        return
+      }
+      
+      // Check cooldown to prevent spam
+      lastAccidentTime[vehicleId] ??= 0
+      if (now - lastAccidentTime[vehicleId] < ACCIDENT_COOLDOWN) {
+        return // Still in cooldown period
+      }
+      
+      if (thresholdExceeded) {
+
+        // Determine which threshold(s) were exceeded (cause of accident)
+        const causes = []
+        if (gValue >= t.g) causes.push(`G-Force: ${gValue.toFixed(2)}g (threshold: ${t.g}g)`)
+        if (gyroValue >= t.gyro) causes.push(`Gyroscope: ${gyroValue.toFixed(2)} deg/s (threshold: ${t.gyro})`)
+        if (deltaV >= t.deltaV) causes.push(`Delta-V: ${deltaV.toFixed(2)} km/h (threshold: ${t.deltaV} km/h)`)
+
+        console.log("🚨 ACCIDENT - Cause:", causes.join(", "))
+        console.log("gValue"+gValue.toFixed(2))
+        // Update last accident time
+        lastAccidentTime[vehicleId] = now
+
+        // Create accident record in database
+        try {
+          const accident = await createAccidentRecord(
+            parsedData.organizationId,
+            vehicleId,
+            driverName,
+            vehicleType,
+            latitude,
+            longitude,
+            speedKmh,
+            deltaV,
+            gValue,
+            gyroValue,
+            now
+          )
+
+          const payload = {
+            type: "accident:detected",
+            data: {
+              organizationId: parsedData.organizationId,
+              vehicleId,
+              driverName,
+              vehicleType,
+              location: { latitude, longitude },
+              speed: Number(speedKmh.toFixed(2)),
+              deltaV: Number(deltaV.toFixed(2)),
+              gValue: Number(gValue.toFixed(2)),
+              gyroValue: Number(gyroValue.toFixed(2)),
+              accidentId: accident.id,
+              timestamp: now,
+            },
+          }
+
+          // Send accident alert to all viewers in the organization
+          viewers.forEach((viewer) => {
+            if (viewer.organizationId === parsedData.organizationId) {
+              viewer.ws.send(JSON.stringify(payload))
+            }
+          })
+        } catch (error) {
+          console.error("❌ ACCIDENT - Failed to create record:", error)
+          
+          // Still send alert even if database write fails
+          const payload = {
+            type: "accident:detected",
+            data: {
+              organizationId: parsedData.organizationId,
+              vehicleId,
+              driverName,
+              vehicleType,
+              location: { latitude, longitude },
+              speed: Number(speedKmh.toFixed(2)),
+              deltaV: Number(deltaV.toFixed(2)),
+              gValue: Number(gValue.toFixed(2)),
+              gyroValue: Number(gyroValue.toFixed(2)),
+              timestamp: now,
+            },
+          }
+
+          viewers.forEach((viewer) => {
+            if (viewer.organizationId === parsedData.organizationId) {
+              viewer.ws.send(JSON.stringify(payload))
+            }
+          })
         }
 
-        console.log("⚠️ Threshold exceeded, verifying with ML model...", {
-          vehicleId,
-          gValue: gValue.toFixed(2),
-          gyroValue: gyroValue.toFixed(2),
-          deltaV: deltaV.toFixed(2),
-        })
-
-        // Call FastAPI to verify if it's actually an accident
-        const prediction = await predictAccident(
-          accelX,
-          accelY,
-          accelZ,
-          gyroX,
-          gyroY,
-          gyroZ
-        )
-
-        if (!prediction) {
-          console.error("❌ Failed to get prediction from FastAPI, skipping accident alert")
-          return
-        }
-
-        console.log("🤖 ML Prediction:", {
-          prediction: prediction.prediction,
-          probability: prediction.probability,
-          confidence: prediction.confidence,
-        })
-
-        // Only send accident alert if ML model confirms high probability
-        // if (
-        //   prediction.prediction === 1 &&
-        //   prediction.probability >= ACCIDENT_PROBABILITY_THRESHOLD
-        // ) {
-        //   lastAccidentTime[vehicleId] = now
-
-        //   const payload = {
-        //     type: "accident:detected",
-        //     data: {
-        //       organizationId: parsedData.organizationId,
-        //       vehicleId,
-        //       driverName,
-        //       vehicleType,
-        //       location: { latitude, longitude },
-        //       speed: Number(speedKmh.toFixed(2)),
-        //       deltaV: Number(deltaV.toFixed(2)),
-        //       gValue: Number(gValue.toFixed(2)),
-        //       gyroValue: Number(gyroValue.toFixed(2)),
-        //       mlPrediction: prediction.prediction,
-        //       mlProbability: Number(prediction.probability.toFixed(4)),
-        //       mlConfidence: prediction.confidence,
-        //       timestamp: now,
-        //     },
-        //   }
-
-        //   // Send accident alert to all viewers in the organization
-        //   viewers.forEach((viewer) => {
-        //     if (viewer.organizationId === parsedData.organizationId) {
-        //       viewer.ws.send(JSON.stringify(payload))
-        //     }
-        //   })
-
-        //   console.log("🚨 ACCIDENT CONFIRMED BY ML MODEL:", payload)
-        // } else {
-        //   console.log("✅ ML model indicates no accident (false positive filtered)", {
-        //     prediction: prediction.prediction,
-        //     probability: prediction.probability,
-        //   })
-        // }
       }
     }
   })
