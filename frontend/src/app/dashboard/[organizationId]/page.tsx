@@ -30,7 +30,6 @@ import {
     ArrowLeft, 
     User, 
     AlertTriangle,
-    Building2,
     Phone,
     MapPin,
     Settings,
@@ -40,13 +39,17 @@ import {
     Eye,
     UserCog,
     LayoutDashboard,
-    Map,
     Users,
     CheckCircle,
-    FileWarning
+    FileWarning,
+    RefreshCw,
+    Square,
+    Wifi,
+    WifiOff,
+    Loader2
 } from "lucide-react"
 import { useSession } from "next-auth/react"
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef, useCallback } from "react"
 import { useRouter, useParams } from "next/navigation"
 import { toast } from "sonner"
 import {
@@ -63,6 +66,7 @@ import {
     Bar,
 } from "recharts"
 import { OverviewMap } from "./OverviewMap"
+import { AccidentAlert } from "@/core/components/accident-alert"
 
 interface Accident {
     id: string
@@ -121,7 +125,7 @@ export default function OrganizationDetailPage() {
     const [open, setOpen] = useState(false)
     const [isLoading, setIsLoading] = useState(false)
     const [loadingVehicles, setLoadingVehicles] = useState(true)
-    const [vehicles, setVehicles] = useState<Vehicle[]>([])
+    const [orgVehicles, setOrgVehicles] = useState<Vehicle[]>([])
     const [organization, setOrganization] = useState<Organization | null>(null)
     const [formData, setFormData] = useState({
         vehicleNumber: "",
@@ -152,6 +156,86 @@ export default function OrganizationDetailPage() {
         inviteRole: "",
     })
     const [isInviting, setIsInviting] = useState(false)
+    const [selectedVehicleForSend, setSelectedVehicleForSend] = useState<string>("")
+    
+    // Real-time accident markers from WebSocket
+    const [realtimeAccidentMarkers, setRealtimeAccidentMarkers] = useState<Map<string, {
+        id: string
+        title: string
+        description: string | null
+        latitude: number
+        longitude: number
+        occurredAt: string
+        status: string
+    }>>(new Map())
+    
+    // Accident alert state for popover
+    const [accidentAlertVisible, setAccidentAlertVisible] = useState(false)
+    const [accidentAlertData, setAccidentAlertData] = useState<{
+        vehicleId: string
+        vehicleName: string
+        location: string
+        timestamp: Date
+        latitude: number
+        longitude: number
+    } | null>(null)
+    
+    // Vehicle tracking state for map
+    interface VehicleData {
+        vehicleId: string
+        vehicleNumber?: string
+        driverName: string
+        vehicleType: string
+        latitude: number
+        longitude: number
+        accelX: number
+        accelY: number
+        accelZ: number
+        gyroX: number
+        gyroY: number
+        gyroZ: number
+        speed?: number
+        timestamp: number
+        positionHistory?: Array<[number, number]> // [latitude, longitude] pairs
+    }
+    const [vehicles, setVehicles] = useState<Map<string, VehicleData>>(new Map())
+    
+    // Map instance ref for programmatic control
+    const overviewMapRef = useRef<any>(null)
+    
+    // Track vehicle activity timeouts
+    const vehicleTimeoutsRef = useRef<Map<string, NodeJS.Timeout>>(new Map())
+    const VEHICLE_TIMEOUT_MS = 10000 // 10 seconds without data = consider disconnected
+    
+    // WebSocket and data sending state
+    const [isSendingData, setIsSendingData] = useState(false)
+    const [connectionStatus, setConnectionStatus] = useState<"disconnected" | "connecting" | "connected" | "stopped">("disconnected")
+    const [isConnecting, setIsConnecting] = useState(false)
+    const [hasReceivedData, setHasReceivedData] = useState(false)
+    const hasReceivedDataRef = useRef(false) // Use ref to track in closure
+    
+    // WebSocket refs
+    const wsRef = useRef<WebSocket | null>(null) // Backend WebSocket
+    const hardwareWsRef = useRef<WebSocket | null>(null) // Hardware device WebSocket
+    const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+    const reconnectAttemptsRef = useRef(0)
+    const maxReconnectAttempts = 5
+    const reconnectDelay = 3000 // 3 seconds
+    const locationWatchIdRef = useRef<number | null>(null)
+    const dataIntervalRef = useRef<NodeJS.Timeout | null>(null)
+    const currentLocationRef = useRef<{ lat: number; lon: number } | null>(null)
+    const driverVehicleRef = useRef<{ id: string; vehicleNumber: string; vehicleType: string; ipAddress?: string | null; port?: number | null } | null>(null)
+    const isSendingDataRef = useRef(false)
+    
+    // Speed calculation refs (for hardware data)
+    const lastLatRef = useRef<number | null>(null)
+    const lastLonRef = useRef<number | null>(null)
+    const lastTimeRef = useRef<number | null>(null)
+    
+    // Timeout detection for when data stops coming
+    const lastDataReceivedRef = useRef<number | null>(null)
+    const dataTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+    const DATA_TIMEOUT_MS = 10000 // 10 seconds without data = consider stopped
 
     // Fetch organization details and drivers
     const fetchOrganization = async () => {
@@ -205,7 +289,7 @@ export default function OrganizationDetailPage() {
 
             if (response.ok) {
                 const data = await response.json()
-                setVehicles(data.vehicles || [])
+                setOrgVehicles(data.vehicles || [])
             } else {
                 const errorData = await response.json()
                 toast.error(errorData.message || "Failed to fetch vehicles")
@@ -286,6 +370,648 @@ export default function OrganizationDetailPage() {
             fetchAccidents()
         }
     }, [session?.user?.accessToken, organizationId])
+
+    // When driver has exactly one assigned vehicle, pre-select it for "Start Sending Data"
+    useEffect(() => {
+        if (organization?.myRole === "DRIVER" && orgVehicles.length > 0 && !selectedVehicleForSend) {
+            const myVehicles = orgVehicles.filter((v) => v.driver?.id === session?.user?.id)
+            if (myVehicles.length === 1) {
+                setSelectedVehicleForSend(myVehicles[0].id)
+            }
+        }
+    }, [organization?.myRole, orgVehicles, session?.user?.id, selectedVehicleForSend])
+
+    // Connect to WebSocket
+    const connectWebSocket = useCallback(() => {
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+            return // Already connected
+        }
+
+        if (isConnecting) return // Already attempting to connect
+
+        setIsConnecting(true)
+        setConnectionStatus("connecting")
+
+        // Get WebSocket URL from backend URL
+        const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:3000"
+        let wsUrl = backendUrl
+        // Convert HTTP/HTTPS to WS/WSS
+        if (wsUrl.startsWith("http://")) {
+            wsUrl = wsUrl.replace("http://", "ws://")
+        } else if (wsUrl.startsWith("https://")) {
+            wsUrl = wsUrl.replace("https://", "wss://")
+        } else if (!wsUrl.startsWith("ws://") && !wsUrl.startsWith("wss://")) {
+            // If no protocol, assume ws://
+            wsUrl = `ws://${wsUrl}`
+        }
+        
+        try {
+            const ws = new WebSocket(wsUrl)
+
+            ws.onopen = () => {
+                console.log("WebSocket connected")
+                setIsConnecting(false)
+                setConnectionStatus("connected")
+                reconnectAttemptsRef.current = 0
+                
+                // Join as viewer if user is admin or viewer
+                if (organization && (organization.myRole === "ADMIN" || organization.myRole === "VIEWER")) {
+                    const joinMessage = {
+                        type: "join:viewer",
+                        organizationId: organizationId,
+                        name: session?.user?.name || "Viewer",
+                    }
+                    console.log("📤 Sending join:viewer message:", joinMessage)
+                    ws.send(JSON.stringify(joinMessage))
+                }
+                // Join as driver if user is a driver and has a selected vehicle
+                else if (organization && organization.myRole === "DRIVER" && driverVehicleRef.current) {
+                    ws.send(JSON.stringify({
+                        type: "join:driver",
+                        organizationId: organizationId,
+                        name: session?.user?.name || "Driver",
+                        vechicleId: driverVehicleRef.current.id,
+                        vehicleType: driverVehicleRef.current.vehicleType,
+                    }))
+                }
+            }
+
+            ws.onmessage = (event) => {
+                try {
+                    const message = event.data
+                    if (typeof message === "string" && message === "WebSocket connected") {
+                        return
+                    }
+
+                    const data = JSON.parse(message)
+                    
+                    if (data.type === "driver:data" && data.data) {
+                        const vehicleId = data.data.vehicleId
+                        console.log(`📍 Received vehicle data for ${vehicleId}:`, {
+                            vehicleNumber: data.data.vehicleNumber,
+                            driverName: data.data.driverName,
+                            location: [data.data.latitude, data.data.longitude],
+                            speed: data.data.speed
+                        })
+                        
+                        // Clear existing timeout for this vehicle
+                        if (vehicleTimeoutsRef.current.has(vehicleId)) {
+                            clearTimeout(vehicleTimeoutsRef.current.get(vehicleId)!)
+                        }
+                        
+                        // Set new timeout to remove vehicle if no data received
+                        const timeout = setTimeout(() => {
+                            console.log(`Vehicle ${vehicleId} timed out - removing from active vehicles`)
+                            setVehicles((prev) => {
+                                const newMap = new Map(prev)
+                                newMap.delete(vehicleId)
+                                return newMap
+                            })
+                            vehicleTimeoutsRef.current.delete(vehicleId)
+                        }, VEHICLE_TIMEOUT_MS)
+                        
+                        vehicleTimeoutsRef.current.set(vehicleId, timeout)
+                        
+                        // Update vehicle position on map
+                        setVehicles((prev) => {
+                            const newMap = new Map(prev)
+                            const existingVehicle = prev.get(vehicleId)
+                            
+                            // Get existing position history or create new array
+                            const positionHistory = existingVehicle?.positionHistory || []
+                            
+                            // Add new position to history
+                            const newPosition: [number, number] = [data.data.latitude, data.data.longitude]
+                            const updatedHistory = [...positionHistory, newPosition]
+                            
+                            // Keep only last 10 positions
+                            const trimmedHistory = updatedHistory.slice(-10)
+                            
+                            const vehicleData: VehicleData = {
+                                vehicleId: vehicleId,
+                                vehicleNumber: data.data.vehicleNumber,
+                                driverName: data.data.driverName,
+                                vehicleType: data.data.vehicleType,
+                                latitude: data.data.latitude,
+                                longitude: data.data.longitude,
+                                accelX: data.data.accelX,
+                                accelY: data.data.accelY,
+                                accelZ: data.data.accelZ,
+                                gyroX: data.data.gyroX,
+                                gyroY: data.data.gyroY,
+                                gyroZ: data.data.gyroZ,
+                                speed: data.data.speed,
+                                timestamp: Date.now(),
+                                positionHistory: trimmedHistory,
+                            }
+
+                            newMap.set(vehicleId, vehicleData)
+                            return newMap
+                        })
+                        
+                        // Reset timeout when data is received
+                        lastDataReceivedRef.current = Date.now()
+                        if (dataTimeoutRef.current) {
+                            clearTimeout(dataTimeoutRef.current)
+                            dataTimeoutRef.current = null
+                        }
+                    }
+                    
+                    // Handle accident detection messages
+                    if (data.type === "accident:detected" && data.data) {
+                        console.log("🚨 Accident detected via WebSocket:", data.data)
+                        
+                        // Add accident marker to map
+                        const accidentMarker = {
+                            id: `realtime-${data.data.vehicleId}-${Date.now()}`,
+                            title: `Accident: ${data.data.driverName}`,
+                            description: `Vehicle: ${data.data.vehicleType}`,
+                            latitude: data.data.location.latitude,
+                            longitude: data.data.location.longitude,
+                            occurredAt: data.data.timestamp,
+                            status: "REPORTED",
+                        }
+                        
+                        setRealtimeAccidentMarkers((prev) => {
+                            const newMap = new Map(prev)
+                            newMap.set(accidentMarker.id, accidentMarker)
+                            return newMap
+                        })
+                        
+                        // Show accident alert popover
+                        setAccidentAlertData({
+                            vehicleId: data.data.vehicleId,
+                            vehicleName: `${data.data.driverName} - ${data.data.vehicleType}`,
+                            location: `${data.data.location.latitude.toFixed(6)}, ${data.data.location.longitude.toFixed(6)}`,
+                            timestamp: new Date(data.data.timestamp),
+                            latitude: data.data.location.latitude,
+                            longitude: data.data.location.longitude,
+                        })
+                        setAccidentAlertVisible(true)
+                    }
+                } catch (error) {
+                    console.error("Error parsing WebSocket message:", error)
+                }
+            }
+
+            ws.onerror = (error) => {
+                console.error("WebSocket error:", error)
+                setIsConnecting(false)
+                setConnectionStatus("disconnected")
+            }
+
+            ws.onclose = () => {
+                console.log("WebSocket disconnected")
+                setIsConnecting(false)
+                setConnectionStatus("disconnected")
+                wsRef.current = null
+
+                // Clear all vehicle timeouts and remove all vehicles from map
+                vehicleTimeoutsRef.current.forEach((timeout) => {
+                    clearTimeout(timeout)
+                })
+                vehicleTimeoutsRef.current.clear()
+                setVehicles(new Map()) // Clear all vehicles when disconnected
+
+                // If we were sending data, stop it
+                if (isSendingDataRef.current) {
+                    stopSendingData()
+                }
+
+                // Retry connection only if not manually stopped
+                if (!isSendingDataRef.current && reconnectAttemptsRef.current < maxReconnectAttempts) {
+                    reconnectAttemptsRef.current += 1
+                    reconnectTimeoutRef.current = setTimeout(() => {
+                        connectWebSocket()
+                    }, reconnectDelay)
+                }
+            }
+
+            wsRef.current = ws
+        } catch (error) {
+            console.error("Error creating WebSocket:", error)
+            setIsConnecting(false)
+            setConnectionStatus("disconnected")
+            toast.error("Failed to connect to WebSocket server")
+        }
+    }, [organization, organizationId, session?.user?.name])
+
+    // Initialize WebSocket connection for viewers and admins
+    useEffect(() => {
+        if (organization && session?.user?.accessToken) {
+            // For viewers and admins, connect immediately
+            if (organization.myRole === "ADMIN" || organization.myRole === "VIEWER") {
+                console.log(`🔌 Initializing WebSocket for ${organization.myRole}`)
+                connectWebSocket()
+            }
+            // For drivers, WebSocket is connected when they start sending data
+        }
+
+        return () => {
+            if (reconnectTimeoutRef.current) {
+                clearTimeout(reconnectTimeoutRef.current)
+            }
+            if (wsRef.current) {
+                wsRef.current.close()
+                wsRef.current = null
+            }
+            // Clear all vehicle timeouts
+            vehicleTimeoutsRef.current.forEach((timeout) => {
+                clearTimeout(timeout)
+            })
+            vehicleTimeoutsRef.current.clear()
+        }
+    }, [organization, session?.user?.accessToken, connectWebSocket])
+
+    // Calculate speed from GPS coordinates (Haversine formula)
+    const calculateSpeed = useCallback((lat: number, lon: number): number => {
+        const R = 6371000 // Earth radius in meters
+        const toRad = (d: number) => d * Math.PI / 180
+
+        if (lastLatRef.current === null || lastLonRef.current === null || lastTimeRef.current === null) {
+            lastLatRef.current = lat
+            lastLonRef.current = lon
+            lastTimeRef.current = Date.now()
+            return 0
+        }
+
+        const dLat = toRad(lat - lastLatRef.current)
+        const dLon = toRad(lon - lastLonRef.current)
+        const a = Math.sin(dLat / 2) ** 2 +
+                  Math.cos(toRad(lastLatRef.current)) * Math.cos(toRad(lat)) * Math.sin(dLon / 2) ** 2
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+        const dist = R * c // Distance in meters
+        const now = Date.now()
+        const timeDiff = (now - lastTimeRef.current) / 1000 // Time difference in seconds
+        const speed = timeDiff > 0 ? (dist / timeDiff) * 3.6 : 0 // Convert to km/h
+
+        lastLatRef.current = lat
+        lastLonRef.current = lon
+        lastTimeRef.current = now
+
+        return speed
+    }, [])
+
+    // Stop sending data
+    const stopSendingData = useCallback(() => {
+        // Close hardware WebSocket connection
+        if (hardwareWsRef.current) {
+            hardwareWsRef.current.close()
+            hardwareWsRef.current = null
+        }
+        
+        // Clear the data sending interval
+        if (dataIntervalRef.current) {
+            clearInterval(dataIntervalRef.current)
+            dataIntervalRef.current = null
+        }
+        
+        // Clear timeout detection
+        if (dataTimeoutRef.current) {
+            clearTimeout(dataTimeoutRef.current)
+            dataTimeoutRef.current = null
+        }
+        
+        // Stop location tracking
+        if (locationWatchIdRef.current !== null) {
+            navigator.geolocation.clearWatch(locationWatchIdRef.current)
+            locationWatchIdRef.current = null
+        }
+        
+        // Reset speed calculation refs
+        lastLatRef.current = null
+        lastLonRef.current = null
+        lastTimeRef.current = null
+        lastDataReceivedRef.current = null
+        
+        // Reset state
+        isSendingDataRef.current = false
+        hasReceivedDataRef.current = false
+        setIsSendingData(false)
+        setIsConnecting(false)
+        setHasReceivedData(false)
+        currentLocationRef.current = null
+        setConnectionStatus("stopped")
+        
+        toast.info("Stopped sending vehicle data")
+    }, [])
+
+    // Start sending data
+    const startSendingData = useCallback(async () => {
+        console.log("clicked")
+        if (!selectedVehicleForSend) {
+            toast.error("Please select a vehicle first")
+            return
+        }
+
+        const selectedVehicle = orgVehicles.find((v) => v.id === selectedVehicleForSend && v.driver?.id === session?.user?.id)
+        if (!selectedVehicle) {
+            toast.error("Selected vehicle not found")
+            return
+        }
+
+        if (!selectedVehicle.ipAddress || selectedVehicle.ipAddress.trim() === "") {
+            toast.error("Vehicle IP address not configured. Please add IP address in vehicle settings.")
+            return
+        }
+
+        setHasReceivedData(false) // Reset data received flag for new connection attempt
+        hasReceivedDataRef.current = false // Reset ref as well
+        setIsConnecting(true) // Set connecting state early
+        setConnectionStatus("connecting")
+
+        // Update driverVehicleRef with selected vehicle
+        const vehicle = {
+            id: selectedVehicle.id,
+            vehicleNumber: selectedVehicle.vehicleNumber,
+            vehicleType: selectedVehicle.vehicleType,
+            ipAddress: selectedVehicle.ipAddress,
+            port: selectedVehicle.port || 81,
+        }
+        driverVehicleRef.current = vehicle
+
+        // Ensure backend WebSocket is connected
+        if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+            connectWebSocket()
+            
+            // Wait for connection
+            const checkConnection = setInterval(() => {
+                if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+                    clearInterval(checkConnection)
+                    // Continue with starting data after connection
+                    setTimeout(() => {
+                        startSendingData()
+                    }, 500)
+                }
+            }, 100)
+            
+            // Timeout after 5 seconds
+            setTimeout(() => {
+                clearInterval(checkConnection)
+                if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+                    toast.error("Failed to connect to backend. Please try again.")
+                    setIsConnecting(false)
+                    setConnectionStatus("stopped")
+                }
+            }, 5000)
+            
+            return
+        }
+        
+        // Join as driver with selected vehicle on backend WebSocket
+        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+            wsRef.current.send(JSON.stringify({
+                type: "join:driver",
+                organizationId: organizationId,
+                name: session?.user?.name || "Driver",
+                vechicleId: vehicle.id,
+                vehicleType: vehicle.vehicleType,
+            }))
+        }
+
+        // Connect to hardware device WebSocket
+        const vehiclePort = selectedVehicle.port || 81
+        const hardwareWsUrl = `ws://${selectedVehicle.ipAddress}:${vehiclePort}`
+        console.log(`Connecting to hardware device at ${hardwareWsUrl}`)
+        
+        // Connecting state is already set at the beginning of the function
+        
+        try {
+            const hardwareWs = new WebSocket(hardwareWsUrl)
+            hardwareWsRef.current = hardwareWs
+
+            hardwareWs.onopen = () => {
+                console.log("Hardware WebSocket opened, waiting for data...")
+                // Keep connecting state - don't change it here
+                
+                // Set a timeout to check if we receive data within 10 seconds
+                const connectionTimeout = setTimeout(() => {
+                    if (!hasReceivedDataRef.current && hardwareWsRef.current) {
+                        console.error("No data received from hardware device within 10 seconds")
+                        toast.error(`No data received from ${selectedVehicle.ipAddress}:${vehiclePort}. Check if device is sending data.`)
+                        
+                        // Close the WebSocket and reset states
+                        if (hardwareWsRef.current) {
+                            hardwareWsRef.current.close()
+                            hardwareWsRef.current = null
+                        }
+                        setIsConnecting(false)
+                        setConnectionStatus("stopped")
+                        setHasReceivedData(false)
+                        hasReceivedDataRef.current = false
+                    }
+                }, 10000) // 10 second timeout
+                
+                // Store timeout reference to clear it when data is received
+                hardwareWs.addEventListener('message', () => {
+                    clearTimeout(connectionTimeout)
+                }, { once: true })
+            }
+
+            hardwareWs.onmessage = (event) => {
+                try {
+                    const d = JSON.parse(event.data)
+                    
+                    // Extract data fields
+                    const latRaw = d.lat ?? d.latitude
+                    const lonRaw = d.lon ?? d.lng ?? d.longitude
+                    const lat = typeof latRaw === "number" ? latRaw : parseFloat(latRaw)
+                    const lon = typeof lonRaw === "number" ? lonRaw : parseFloat(lonRaw)
+                    const accelX = parseFloat(d.accelX) || 0
+                    const accelY = parseFloat(d.accelY) || 0
+                    const accelZ = parseFloat(d.accelZ) || 0
+                    const gyroX = parseFloat(d.gyroX) || 0
+                    const gyroY = parseFloat(d.gyroY) || 0
+                    const gyroZ = parseFloat(d.gyroZ) || 0
+
+                    // Validate GPS coordinates
+                    if (isNaN(lat) || isNaN(lon)) {
+                        console.warn("Invalid GPS coordinates received:", d)
+                        return
+                    }
+
+                    // First data received - mark as connected
+                    if (!hasReceivedDataRef.current) {
+                        hasReceivedDataRef.current = true
+                        setHasReceivedData(true)
+                        setIsConnecting(false)
+                        setIsSendingData(true)
+                        isSendingDataRef.current = true
+                        setConnectionStatus("connected")
+                        toast.success(`Connected to vehicle device at ${selectedVehicle.ipAddress}:${vehiclePort}`)
+                        console.log("✅ First data received from hardware device - connection established")
+                    }
+
+                    // Calculate speed from GPS coordinates
+                    const speed = calculateSpeed(lat, lon)
+
+                    // Update current location
+                    currentLocationRef.current = { lat, lon }
+
+                    // Forward data to backend WebSocket
+                    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN && driverVehicleRef.current) {
+                        const dataToSend = {
+                            type: "driver:data",
+                            organizationId: organizationId,
+                            data: {
+                                vehicleId: driverVehicleRef.current.id,
+                                vehicleNumber: driverVehicleRef.current.vehicleNumber,
+                                driverName: session?.user?.name || "Driver",
+                                vehicleType: driverVehicleRef.current.vehicleType,
+                                latitude: lat,
+                                longitude: lon,
+                                accelX: accelX,
+                                accelY: accelY,
+                                accelZ: accelZ,
+                                gyroX: gyroX,
+                                gyroY: gyroY,
+                                gyroZ: gyroZ,
+                                speed: speed,
+                            },
+                        }
+
+                        wsRef.current.send(JSON.stringify(dataToSend))
+                        console.log("📤 Forwarding hardware data to backend:", dataToSend.data)
+                        
+                        // Update vehicle position on map immediately
+                        setVehicles((prev) => {
+                            const newMap = new Map(prev)
+                            const existingVehicle = prev.get(driverVehicleRef.current!.id)
+                            
+                            // Get existing position history or create new array
+                            const positionHistory = existingVehicle?.positionHistory || []
+                            
+                            // Add new position to history
+                            const newPosition: [number, number] = [lat, lon]
+                            const updatedHistory = [...positionHistory, newPosition]
+                            
+                            // Keep only last 10 positions
+                            const trimmedHistory = updatedHistory.slice(-10)
+                            
+                            const vehicleData: VehicleData = {
+                                vehicleId: driverVehicleRef.current!.id,
+                                vehicleNumber: driverVehicleRef.current!.vehicleNumber,
+                                driverName: session?.user?.name || "Driver",
+                                vehicleType: driverVehicleRef.current!.vehicleType,
+                                latitude: lat,
+                                longitude: lon,
+                                accelX: accelX,
+                                accelY: accelY,
+                                accelZ: accelZ,
+                                gyroX: gyroX,
+                                gyroY: gyroY,
+                                gyroZ: gyroZ,
+                                speed: speed,
+                                timestamp: Date.now(),
+                                positionHistory: trimmedHistory,
+                            }
+
+                            newMap.set(vehicleData.vehicleId, vehicleData)
+                            return newMap
+                        })
+                        
+                        // Reset timeout when data is received
+                        lastDataReceivedRef.current = Date.now()
+                        if (dataTimeoutRef.current) {
+                            clearTimeout(dataTimeoutRef.current)
+                            dataTimeoutRef.current = null
+                        }
+                        
+                        // Set up timeout check for next data (only if not already set)
+                        if (!dataTimeoutRef.current) {
+                            dataTimeoutRef.current = setTimeout(() => {
+                                const timeSinceLastData = lastDataReceivedRef.current 
+                                    ? Date.now() - lastDataReceivedRef.current 
+                                    : Infinity
+                                
+                                if (timeSinceLastData >= DATA_TIMEOUT_MS && isSendingDataRef.current) {
+                                    console.warn("No data received for", DATA_TIMEOUT_MS, "ms. Stopping data sending.")
+                                    toast.warning("Data stream stopped. Connection may be lost.")
+                                    stopSendingData()
+                                }
+                                dataTimeoutRef.current = null
+                            }, DATA_TIMEOUT_MS)
+                        }
+                    }
+                } catch (error) {
+                    console.error("Error parsing hardware data:", error)
+                }
+            }
+
+            hardwareWs.onerror = (error) => {
+                console.error(`WebSocket error occurred for ${hardwareWsUrl}`, error)
+                if (!hasReceivedDataRef.current) {
+                    toast.error(`Failed to connect to ${selectedVehicle.ipAddress}:${vehiclePort}`)
+                    setIsConnecting(false)
+                    setConnectionStatus("stopped")
+                }
+            }
+
+            hardwareWs.onclose = (event) => {
+                console.log("Hardware WebSocket closed", {
+                    code: event.code,
+                    reason: event.reason,
+                    wasClean: event.wasClean,
+                    url: hardwareWsUrl
+                })
+                
+                hardwareWsRef.current = null
+                
+                // Only show error messages if we were trying to connect or were connected
+                if (isSendingDataRef.current || isConnecting) {
+                    if (event.code === 1006) {
+                        toast.error(`Connection to ${selectedVehicle.ipAddress}:${vehiclePort} failed. Check network connectivity and device status.`)
+                    } else if (event.code === 1000) {
+                        toast.info("Connection to vehicle device closed")
+                    } else if (!hasReceivedDataRef.current) {
+                        toast.warning("Failed to connect to vehicle device")
+                    } else {
+                        toast.warning("Connection to vehicle device lost")
+                    }
+                }
+                
+                // Reset all states
+                setIsConnecting(false)
+                setIsSendingData(false)
+                isSendingDataRef.current = false
+                hasReceivedDataRef.current = false
+                setConnectionStatus("stopped")
+                
+                // Clear timeout when connection closes
+                if (dataTimeoutRef.current) {
+                    clearTimeout(dataTimeoutRef.current)
+                    dataTimeoutRef.current = null
+                }
+            }
+        } catch (error) {
+            console.error("Error connecting to hardware device:", error)
+            toast.error(`Failed to connect to vehicle device: ${error}`)
+            // Reset states on error
+            setIsConnecting(false)
+            setConnectionStatus("stopped")
+            setHasReceivedData(false)
+            hasReceivedDataRef.current = false
+        }
+    }, [selectedVehicleForSend, orgVehicles, session?.user?.id, session?.user?.name, organizationId, connectWebSocket, stopSendingData, calculateSpeed])
+
+    // Cleanup on unmount
+    useEffect(() => {
+        return () => {
+            if (reconnectTimeoutRef.current) {
+                clearTimeout(reconnectTimeoutRef.current)
+            }
+            if (wsRef.current) {
+                wsRef.current.close()
+                wsRef.current = null
+            }
+            // Clear all vehicle timeouts
+            vehicleTimeoutsRef.current.forEach((timeout) => {
+                clearTimeout(timeout)
+            })
+            vehicleTimeoutsRef.current.clear()
+            stopSendingData()
+        }
+    }, [stopSendingData])
 
     const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const { name, value } = e.target
@@ -489,37 +1215,166 @@ export default function OrganizationDetailPage() {
 
     if (!organization) {
         return (
-            <div className="flex justify-center items-center min-h-screen">
-                <div className="text-muted-foreground">Loading organization...</div>
+            <div className="flex flex-col justify-center items-center min-h-screen gap-3">
+                <RefreshCw className="h-8 w-8 text-muted-foreground animate-spin" />
+                <p className="text-muted-foreground">Loading organization...</p>
             </div>
         )
     }
 
     return (
         <div className="flex p-4 flex-col gap-6">
+            {/* Accident Alert Popover */}
+            <AccidentAlert
+                isVisible={accidentAlertVisible}
+                vehicleId={accidentAlertData?.vehicleId}
+                vehicleName={accidentAlertData?.vehicleName}
+                location={accidentAlertData?.location}
+                timestamp={accidentAlertData?.timestamp}
+                onViewLocation={() => {
+                    if (accidentAlertData && overviewMapRef.current) {
+                        // Center map on accident location
+                        overviewMapRef.current.setView(
+                            [accidentAlertData.latitude, accidentAlertData.longitude],
+                            17,
+                            {
+                                animate: true,
+                                duration: 1,
+                            }
+                        )
+                        // Close the alert
+                        setAccidentAlertVisible(false)
+                    }
+                }}
+                onAcknowledge={() => {
+                    setAccidentAlertVisible(false)
+                }}
+            />
+            
             {/* Header */}
-            <div className="flex items-center gap-4">
-                <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => router.push("/dashboard")}
-                >
-                    <ArrowLeft className="h-4 w-4" />
-                </Button>
-                <div className="flex-1">
-                    <h1 className="text-3xl font-bold">{organization.name}</h1>
-                    <div className="flex items-center gap-4 mt-2 text-sm text-muted-foreground">
-                        <div className="flex items-center gap-1">
-                            <MapPin className="h-4 w-4" />
-                            <span>{organization.address}</span>
-                        </div>
-                        <div className="flex items-center gap-1">
-                            <Phone className="h-4 w-4" />
-                            <span>{organization.phoneNumber}</span>
+            <div className="flex items-center justify-between gap-4">
+                <div className="flex items-center gap-4 min-w-0">
+                    <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => router.push("/dashboard")}
+                    >
+                        <ArrowLeft className="h-4 w-4" />
+                    </Button>
+                    <div className="flex-1 min-w-0">
+                        <h1 className="text-3xl font-bold truncate">{organization.name}</h1>
+                        <div className="flex items-center gap-4 mt-2 text-sm text-muted-foreground flex-wrap">
+                            <div className="flex items-center gap-1">
+                                <MapPin className="h-4 w-4 flex-shrink-0" />
+                                <span className="truncate">{organization.address}</span>
+                            </div>
+                            <div className="flex items-center gap-1">
+                                <Phone className="h-4 w-4 flex-shrink-0" />
+                                <span>{organization.phoneNumber}</span>
+                            </div>
                         </div>
                     </div>
                 </div>
-                {activeTab === "vehicles" && (
+                <div className="flex items-center gap-2 flex-shrink-0">
+                    {organization.myRole === "DRIVER" && (
+                        <>
+                            <div className="flex items-center gap-2">
+                                <Label htmlFor="dashboard-vehicle-select" className="text-sm whitespace-nowrap">
+                                    Select vehicle:
+                                </Label>
+                                <Select
+                                    value={selectedVehicleForSend}
+                                    onValueChange={setSelectedVehicleForSend}
+                                    disabled={isSendingData && hasReceivedData}
+                                >
+                                    <SelectTrigger id="dashboard-vehicle-select" className="w-[200px]">
+                                        <SelectValue placeholder="Choose a vehicle" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        {orgVehicles
+                                            .filter((v) => v.driver?.id === session?.user?.id)
+                                            .map((v) => (
+                                                <SelectItem key={v.id} value={v.id}>
+                                                    {v.vehicleNumber} ({v.vehicleType})
+                                                </SelectItem>
+                                            ))}
+                                        {orgVehicles.filter((v) => v.driver?.id === session?.user?.id).length === 0 && (
+                                            <SelectItem value="none" disabled>
+                                                No vehicles assigned
+                                            </SelectItem>
+                                        )}
+                                    </SelectContent>
+                                </Select>
+                            </div>
+                            {/* Connection and data sending controls */}
+                            {!isSendingData || !hasReceivedData ? (
+                                // Show Connect/Retry button when not sending or connection failed
+                                <Button
+                                    variant="default"
+                                    size="sm"
+                                    onClick={startSendingData}
+                                    disabled={!selectedVehicleForSend || selectedVehicleForSend === "none" || (isConnecting && connectionStatus === "connecting")}
+                                >
+                                    {isConnecting && connectionStatus === "connecting" ? (
+                                        <>
+                                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                            Connecting...
+                                        </>
+                                    ) : connectionStatus === "stopped" ? (
+                                        <>
+                                            <RefreshCw className="h-4 w-4 mr-2" />
+                                            Retry
+                                        </>
+                                    ) : (
+                                        <>
+                                            <Wifi className="h-4 w-4 mr-2" />
+                                            Connect
+                                        </>
+                                    )}
+                                </Button>
+                            ) : (
+                                // Show sending status and stop button when actively sending with data
+                                <>
+                                    <div className="flex items-center gap-2 px-3 py-1 bg-green-100 dark:bg-green-900 rounded-md">
+                                        <div className="h-2 w-2 bg-green-500 rounded-full animate-pulse"></div>
+                                        <span className="text-sm text-green-700 dark:text-green-300">
+                                            Sending data...
+                                        </span>
+                                    </div>
+                                    <Button
+                                        variant="destructive"
+                                        size="sm"
+                                        onClick={stopSendingData}
+                                    >
+                                        <Square className="h-4 w-4 mr-2" />
+                                        Stop
+                                    </Button>
+                                </>
+                            )}
+                            {/* Connection status indicator */}
+                            {(isConnecting || isSendingData || connectionStatus === "stopped") && (
+                                <div className="flex items-center gap-2">
+                                    {isSendingData && hasReceivedData ? (
+                                        <>
+                                            <Wifi className="h-4 w-4 text-green-500" />
+                                            <span className="text-xs text-green-500">Connected</span>
+                                        </>
+                                    ) : isConnecting && connectionStatus === "connecting" ? (
+                                        <>
+                                            <RefreshCw className="h-4 w-4 text-yellow-500 animate-spin" />
+                                            <span className="text-xs text-yellow-500">Waiting for data...</span>
+                                        </>
+                                    ) : connectionStatus === "stopped" ? (
+                                        <>
+                                            <WifiOff className="h-4 w-4 text-red-500" />
+                                            <span className="text-xs text-red-500">Connection Failed</span>
+                                        </>
+                                    ) : null}
+                                </div>
+                            )}
+                        </>
+                    )}
+                    {activeTab === "vehicles" && (
                     <Dialog open={open} onOpenChange={setOpen}>
                         <DialogTrigger asChild>
                             <Button className="w-fit">
@@ -642,7 +1497,8 @@ export default function OrganizationDetailPage() {
                         </form>
                     </DialogContent>
                     </Dialog>
-                )}
+                    )}
+                </div>
             </div>
 
             {/* Tabs */}
@@ -697,27 +1553,27 @@ export default function OrganizationDetailPage() {
                             <div className="h-full flex items-center justify-center text-muted-foreground">Loading map...</div>
                         ) : (
                             <OverviewMap
-                                accidents={accidents}
+                                accidents={[...accidents, ...Array.from(realtimeAccidentMarkers.values())]}
+                                vehicles={vehicles}
                                 center={
-                                    accidents.length > 0
+                                    vehicles.size > 0
+                                        ? (() => {
+                                            const firstVehicle = Array.from(vehicles.values())[0]
+                                            return [firstVehicle.latitude, firstVehicle.longitude] as [number, number]
+                                          })()
+                                        : accidents.length > 0
                                         ? [accidents[0].latitude, accidents[0].longitude]
                                         : [27.7172, 85.324]
                                 }
                                 className="h-full w-full"
+                                onMapReady={(map) => {
+                                    overviewMapRef.current = map
+                                }}
                             />
                         )}
                         <div className="absolute top-2 left-2 z-[1000] text-xs text-muted-foreground bg-background/90 px-2 py-1 rounded shadow-sm">
                             Incident locations · {organization?.address || "—"}
                         </div>
-                        <Button
-                            variant="secondary"
-                            size="sm"
-                            className="absolute bottom-2 right-2 z-[1000]"
-                            onClick={() => router.push(`/dashboard/${organizationId}/map`)}
-                        >
-                            <Map className="h-4 w-4 mr-1" />
-                            Live Map
-                        </Button>
                     </div>
 
                     {/* Right column: metrics, accident card, charts, vehicle list */}
@@ -744,7 +1600,7 @@ export default function OrganizationDetailPage() {
                                         </div>
                                         <div>
                                             <p className="text-xs text-muted-foreground">Vehicles</p>
-                                            <p className="text-lg font-semibold">{vehicles.length}</p>
+                                            <p className="text-lg font-semibold">{orgVehicles.length}</p>
                                         </div>
                                     </CardContent>
                                 </Card>
@@ -842,8 +1698,8 @@ export default function OrganizationDetailPage() {
                                             data={[
                                                 ...Array.from({ length: 8 }, (_, i) => ({
                                                     time: `${i * 3}:00`,
-                                                    vehicles: Math.min(vehicles.length, Math.round(vehicles.length * (0.6 + 0.4 * Math.sin(i * 0.8)))),
-                                                    avg: Math.round(vehicles.length * 0.85),
+                                                    vehicles: Math.min(orgVehicles.length, Math.round(orgVehicles.length * (0.6 + 0.4 * Math.sin(i * 0.8)))),
+                                                    avg: Math.round(orgVehicles.length * 0.85),
                                                 })),
                                             ]}
                                         >
@@ -867,7 +1723,7 @@ export default function OrganizationDetailPage() {
                                         </AreaChart>
                                     </ResponsiveContainer>
                                 </div>
-                                <p className="text-center text-2xl font-semibold mt-2">{vehicles.length} vehicles</p>
+                                <p className="text-center text-2xl font-semibold mt-2">{orgVehicles.length} vehicles</p>
                             </CardContent>
                         </Card>
 
@@ -943,11 +1799,11 @@ export default function OrganizationDetailPage() {
                             </CardContent>
                         </Card>
 
-                        {/* All vehicles in this org */}
+                        {/* Active vehicles */}
                         <Card>
                             <CardHeader className="pb-2">
                                 <CardTitle className="text-base flex items-center justify-between">
-                                    <span>All vehicles</span>
+                                    <span>Active vehicles</span>
                                     <Button
                                         variant="ghost"
                                         size="sm"
@@ -956,34 +1812,52 @@ export default function OrganizationDetailPage() {
                                         View all
                                     </Button>
                                 </CardTitle>
-                                <CardDescription>Vehicles and their assigned drivers</CardDescription>
+                                <CardDescription>Currently active vehicles sending data</CardDescription>
                             </CardHeader>
                             <CardContent>
-                                {loadingVehicles ? (
-                                    <p className="text-sm text-muted-foreground">Loading...</p>
-                                ) : vehicles.length === 0 ? (
-                                    <p className="text-sm text-muted-foreground">No vehicles</p>
+                                {vehicles.size === 0 ? (
+                                    <p className="text-sm text-muted-foreground">No active vehicles</p>
                                 ) : (
                                     <div className="space-y-2 max-h-[220px] overflow-y-auto">
-                                        {vehicles.map((v) => (
-                                            <div
-                                                key={v.id}
-                                                className="flex items-center justify-between py-2 px-3 rounded-lg border bg-muted/30 text-sm"
-                                            >
-                                                <div className="flex items-center gap-2">
-                                                    <span className="text-lg">
-                                                        {v.vehicleType === "CAR" ? "🚗" : v.vehicleType === "MOTORCYCLE" ? "🏍️" : v.vehicleType === "TRUCK" ? "🚚" : "🚌"}
-                                                    </span>
-                                                    <div>
-                                                        <p className="font-medium">{v.vehicleNumber}</p>
-                                                        <p className="text-xs text-muted-foreground">
-                                                            {v.driver.fullName || v.driver.phoneNumber}
-                                                        </p>
+                                        {Array.from(vehicles.values()).map((v) => {
+                                            const vehicleInfo = orgVehicles.find(ov => ov.id === v.vehicleId)
+                                            return (
+                                                <div
+                                                    key={v.vehicleId}
+                                                    className="flex items-center justify-between py-2 px-3 rounded-lg border bg-muted/30 text-sm hover:bg-muted/50 cursor-pointer transition-colors"
+                                                    onClick={() => {
+                                                        // Center map on this vehicle
+                                                        if (overviewMapRef.current) {
+                                                            overviewMapRef.current.setView([v.latitude, v.longitude], 16, {
+                                                                animate: true,
+                                                                duration: 1,
+                                                            })
+                                                        }
+                                                    }}
+                                                >
+                                                    <div className="flex items-center gap-2">
+                                                        <div className="relative">
+                                                            <span className="text-lg">
+                                                                {v.vehicleType === "CAR" ? "🚗" : v.vehicleType === "MOTORCYCLE" ? "🏍️" : v.vehicleType === "TRUCK" ? "🚚" : "🚌"}
+                                                            </span>
+                                                            <div className="absolute -top-1 -right-1 h-2 w-2 bg-green-500 rounded-full animate-pulse"></div>
+                                                        </div>
+                                                        <div>
+                                                            <p className="font-medium">{v.vehicleNumber || vehicleInfo?.vehicleNumber || v.vehicleId}</p>
+                                                            <p className="text-xs text-muted-foreground">
+                                                                {v.driverName}
+                                                            </p>
+                                                        </div>
+                                                    </div>
+                                                    <div className="flex flex-col items-end gap-1">
+                                                        <span className="text-xs text-muted-foreground">{v.vehicleType}</span>
+                                                        {v.speed !== undefined && (
+                                                            <span className="text-xs font-medium text-green-600">{v.speed.toFixed(0)} km/h</span>
+                                                        )}
                                                     </div>
                                                 </div>
-                                                <span className="text-xs text-muted-foreground">{v.vehicleType}</span>
-                                            </div>
-                                        ))}
+                                            )
+                                        })}
                                     </div>
                                 )}
                             </CardContent>
@@ -1000,7 +1874,7 @@ export default function OrganizationDetailPage() {
                 <div className="flex justify-center items-center py-12">
                     <div className="text-muted-foreground">Loading vehicles...</div>
                 </div>
-            ) : vehicles.length === 0 ? (
+            ) : orgVehicles.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-12 border-2 border-dashed rounded-lg">
                     <Car className="h-12 w-12 text-muted-foreground mb-4" />
                     <p className="text-lg font-semibold mb-2">No vehicles found</p>
@@ -1014,7 +1888,7 @@ export default function OrganizationDetailPage() {
                 </div>
             ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                    {vehicles.map((vehicle) => (
+                    {orgVehicles.map((vehicle) => (
                         <div
                             key={vehicle.id}
                             className="border rounded-lg p-6 hover:shadow-lg transition-shadow bg-card"

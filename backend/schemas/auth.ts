@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 export const registerSchema = z.object({
+  fullName:z.string(),
   phoneNumber: z
     .string()
     .min(10, "Phone number must be at least 10 characters")

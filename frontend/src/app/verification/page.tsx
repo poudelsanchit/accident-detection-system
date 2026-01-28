@@ -23,8 +23,19 @@ export default function VerificationPage() {
   const [countdown, setCountdown] = useState(60);
   const [canResend, setCanResend] = useState(false);
   const [isVerifying, setIsVerifying] = useState(false);
+  const [isResending, setIsResending] = useState(false);
   const [error, setError] = useState("");
   const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
+
+  // Format phone number for display (mask middle digits)
+  const formatPhoneNumber = (phone: string | undefined) => {
+    if (!phone) return "***";
+    if (phone.length <= 4) return phone;
+    const firstTwo = phone.slice(0, 2);
+    const lastTwo = phone.slice(-2);
+    const masked = "*".repeat(Math.max(phone.length - 4, 0));
+    return `${firstTwo}${masked}${lastTwo}`;
+  };
 
   // Countdown timer
   useEffect(() => {
@@ -115,22 +126,34 @@ export default function VerificationPage() {
 
   // Resend OTP
   const handleResend = async () => {
-    if (!canResend) return;
+    if (!canResend || !phoneNumber) return;
+
+    setIsResending(true);
+    setError("");
 
     try {
-      // Add your resend OTP API call here
-      await fetch("/api/resend-otp", {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/auth/resend-code`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ 
+          phoneNumber: phoneNumber,
+          phoneNumberPrefix: "+977" // Adjust this based on your needs
+        }),
       });
+
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.message || "Failed to resend OTP");
+      }
 
       setCountdown(60);
       setCanResend(false);
       setOtp(["", "", "", "", "", ""]);
-      setError("");
       inputRefs.current[0]?.focus();
     } catch (err) {
-      setError("Failed to resend OTP. Please try again.");
+      setError(err instanceof Error ? err.message : "Failed to resend OTP. Please try again.");
+    } finally {
+      setIsResending(false);
     }
   };
 
@@ -144,7 +167,7 @@ export default function VerificationPage() {
           <CardTitle>Verify Your Account</CardTitle>
           <CardDescription>
             Please verify your account by entering the OTP sent to your number{" "}
-            <span className="font-semibold">98*******2</span>
+            <span className="font-semibold">{formatPhoneNumber(phoneNumber)}</span>
           </CardDescription>
         </CardHeader>
 
@@ -205,10 +228,10 @@ export default function VerificationPage() {
               variant="ghost"
               size="sm"
               onClick={handleResend}
-              disabled={!canResend}
+              disabled={!canResend || isResending}
             >
-              <RefreshCw className="w-4 h-4 mr-2" />
-              Resend OTP
+              <RefreshCw className={`w-4 h-4 mr-2 ${isResending ? 'animate-spin' : ''}`} />
+              {isResending ? "Resending..." : "Resend OTP"}
             </Button>
           </div>
 

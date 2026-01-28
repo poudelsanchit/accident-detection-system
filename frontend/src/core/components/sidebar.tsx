@@ -25,7 +25,7 @@ export function Sidebar() {
 
     const isActive = (path: string) => {
         if (path === "/dashboard" && pathname === "/dashboard") return true
-        if (path === "/inbox" && pathname === "/inbox") return true
+        if (path === "/dashboard/inbox" && pathname === "/dashboard/inbox") return true
         if (path !== "/dashboard" && pathname?.startsWith(path)) return true
         return false
     }
@@ -60,9 +60,9 @@ export function Sidebar() {
                         Dashboard
                     </Button>
                 </Link>
-                <Link href="/inbox">
+                <Link href="/dashboard/inbox">
                     <Button
-                        variant={isActive("/inbox") ? "secondary" : "ghost"}
+                        variant={isActive("/dashboard/inbox") ? "secondary" : "ghost"}
                         className="w-full justify-start"
                     >
                         <Inbox className="mr-2 h-4 w-4" />

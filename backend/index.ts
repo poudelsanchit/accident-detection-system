@@ -8,6 +8,7 @@ import { authMiddleware } from "./middleware/authMiddleware"
 import invitationRouter from "./routes/invitation"
 import { WebSocket, WebSocketServer } from "ws"
 import { prisma } from "./config/prismaClient"
+import { sendAccidentAlert } from "./config/twilio"
 
 const app = express()
 
@@ -79,7 +80,7 @@ const THRESHOLDS: Record<
   VehicleType,
   { g: number; gyro: number; deltaV: number }
 > = {
-  MOTORCYCLE: { g: 3.0, gyro: 200, deltaV: 30 },
+  MOTORCYCLE: { g: 0.1, gyro: 200, deltaV: 30 },
   CAR: { g: 0.1, gyro: 250, deltaV: 45 },
   TRUCK: { g: 6.5, gyro: 350, deltaV: 60 },
   BUS: { g: 6.5, gyro: 350, deltaV: 60 },
@@ -111,6 +112,63 @@ function haversineDistance(
 
 function isValidVehicleType(value: any): value is VehicleType {
   return Object.values(VehicleType).includes(value)
+}
+
+/**
+ * Send SMS alerts to all organization members except the driver
+ */
+async function sendAccidentSMSAlerts(
+  organizationId: string,
+  driverId: string,
+  driverName: string,
+  vehicleNumber: string,
+  vehicleType: string,
+  latitude: number,
+  longitude: number
+) {
+  try {
+    // Fetch all organization members with their user details
+    const members = await prisma.organizationMember.findMany({
+      where: {
+        organizationId,
+        userId: { not: driverId } // Exclude the driver
+      },
+      include: {
+        user: {
+          select: {
+            phoneNumber: true,
+            fullName: true
+          }
+        }
+      }
+    })
+
+    if (members.length === 0) {
+      console.log("⚠️ No members to notify (excluding driver)")
+      return
+    }
+
+    // Prepare SMS message
+    const locationUrl = `https://www.google.com/maps?q=${latitude},${longitude}`
+    const messageBody = `🚨 ACCIDENT ALERT!\n\nDriver: ${driverName}\nVehicle: ${vehicleNumber} (${vehicleType})\nLocation: ${locationUrl}\n\nPlease respond immediately.`
+
+    console.log(`📤 Sending SMS to ${members.length} member(s)...`)
+
+    // Send SMS to all members (excluding driver)
+    const smsPromises = members.map(member => 
+      sendAccidentAlert("+977"+member.user.phoneNumber, messageBody)
+    )
+
+    const results = await Promise.allSettled(smsPromises)
+    
+    // Log results
+    const successful = results.filter(r => r.status === 'fulfilled' && r.value.success).length
+    const failed = results.length - successful
+    
+    console.log(`✅ SMS sent: ${successful} successful, ${failed} failed`)
+  } catch (error) {
+    console.error("❌ Error sending SMS alerts:", error)
+  }
 }
 
 /* ===================== ACCIDENT CREATION ===================== */
@@ -320,6 +378,17 @@ wss.on("connection", (ws) => {
             gValue,
             gyroValue,
             now
+          )
+
+          // Send SMS alerts to organization members (excluding driver)
+          await sendAccidentSMSAlerts(
+            parsedData.organizationId,
+            accident.vehicle.driverId,
+            driverName,
+            accident.vehicle.vehicleNumber,
+            vehicleType,
+            latitude,
+            longitude
           )
 
           const payload = {

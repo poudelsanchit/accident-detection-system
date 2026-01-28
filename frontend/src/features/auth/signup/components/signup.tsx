@@ -35,6 +35,8 @@ import {
 import Link from "next/link"
 
 const formSchema = z.object({
+    fullName: z.string().min(5, "Fullname must be at least 5 characters long")
+    ,
     prefix: z
         .string()
         .min(1, "Please select a prefix"),
@@ -63,6 +65,7 @@ export default function SignupForm() {
     const form = useForm<z.infer<typeof formSchema>>({
         resolver: zodResolver(formSchema),
         defaultValues: {
+            fullName:"",
             prefix: "+977",
             phoneNumber: "",
             password: "",
@@ -79,6 +82,7 @@ export default function SignupForm() {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
+                    fullName: data.fullName,
                     phoneNumberPrefix: data.prefix,
                     phoneNumber: data.phoneNumber,
                     password: data.password,
@@ -124,6 +128,30 @@ export default function SignupForm() {
                 <CardContent>
                     <form id="signup-form" onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
                         <FieldGroup>
+                            
+                               <Controller
+                                name="fullName"
+                                control={form.control}
+                                render={({ field, fieldState }) => (
+                                    <Field data-invalid={fieldState.invalid}>
+                                        <FieldLabel htmlFor="fullname">
+                                            Full Name
+                                        </FieldLabel>
+                                        <Input
+                                            {...field}
+                                            id="fullName"
+                                            type="text"
+                                            aria-invalid={fieldState.invalid}
+                                            placeholder="Enter your Full Name"
+                                            disabled={isLoading}
+                                        />
+                                        {fieldState.invalid && (
+                                            <FieldError errors={[fieldState.error]} />
+                                        )}
+                                    </Field>
+                                )}
+                            />
+
                             <Controller
                                 name="phoneNumber"
                                 control={form.control}

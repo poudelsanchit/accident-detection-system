@@ -28,6 +28,7 @@ export function MapUpdater({ vehicles }: { vehicles: Map<string, VehicleData> })
   const map = useMap()
   const hasInitialFit = useRef(false)
   const lastVehicleCount = useRef(0)
+  const trackedVehicleIds = useRef<Set<string>>(new Set())
   
   useEffect(() => {
     if (vehicles.size === 0 || !L || !map) return
@@ -38,11 +39,41 @@ export function MapUpdater({ vehicles }: { vehicles: Map<string, VehicleData> })
       return
     }
     
-    // Only fit bounds on initial load (when vehicles first appear)
-    // Don't refit if vehicles are just updating (count stays the same)
     const currentVehicleCount = vehicles.size
     const isNewVehicle = currentVehicleCount > lastVehicleCount.current
     
+    // Check for newly connected vehicles
+    if (isNewVehicle) {
+      const newVehicles = Array.from(vehicles.values()).filter(
+        (v) => !trackedVehicleIds.current.has(v.vehicleId)
+      )
+      
+      if (newVehicles.length > 0) {
+        // Center map on the first new vehicle
+        const newVehicle = newVehicles[0]
+        if (
+          !isNaN(newVehicle.latitude) &&
+          !isNaN(newVehicle.longitude) &&
+          newVehicle.latitude !== 0 &&
+          newVehicle.longitude !== 0
+        ) {
+          try {
+            map.setView([newVehicle.latitude, newVehicle.longitude], 15, {
+              animate: true,
+              duration: 1,
+            })
+            console.log(`Map centered on newly connected vehicle: ${newVehicle.vehicleId}`)
+          } catch (error) {
+            console.error("Error centering map on new vehicle:", error)
+          }
+        }
+        
+        // Add new vehicles to tracked set
+        newVehicles.forEach((v) => trackedVehicleIds.current.add(v.vehicleId))
+      }
+    }
+    
+    // Only fit bounds on initial load (when vehicles first appear)
     if (!hasInitialFit.current && vehicles.size > 0) {
       try {
         const vehicleLocations = Array.from(vehicles.values())
@@ -66,6 +97,18 @@ export function MapUpdater({ vehicles }: { vehicles: Map<string, VehicleData> })
     // Update the vehicle count reference
     lastVehicleCount.current = currentVehicleCount
   }, [vehicles, map])
+  
+  // Clean up tracked vehicles when they disconnect
+  useEffect(() => {
+    const currentVehicleIds = new Set(vehicles.keys())
+    const trackedIds = Array.from(trackedVehicleIds.current)
+    
+    trackedIds.forEach((id) => {
+      if (!currentVehicleIds.has(id)) {
+        trackedVehicleIds.current.delete(id)
+      }
+    })
+  }, [vehicles])
   
   return null
 }

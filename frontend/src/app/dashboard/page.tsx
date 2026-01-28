@@ -253,10 +253,6 @@ export default function Dashboard() {
                     <p className="text-muted-foreground text-sm mb-4">
                         You are not a member of any organization yet.
                     </p>
-                    <Button onClick={() => setOpen(true)}>
-                        <Plus className="mr-2 h-4 w-4" />
-                        Create Your First Organization
-                    </Button>
                 </div>
             ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -313,7 +309,7 @@ export default function Dashboard() {
                                     <Button
                                         onClick={(e) => {
                                             e.stopPropagation()
-                                            router.push(`/dashboard/${org.id}/map`)
+                                            router.push(`/dashboard/${org.id}`)
                                         }}
                                         variant="outline"
                                         className="w-full"

@@ -1,7 +1,7 @@
 "use client"
 import { useEffect, useRef, useState, useCallback } from "react"
 import { useSession } from "next-auth/react"
-import { useParams, useRouter } from "next/navigation"
+import { useParams, useRouter, useSearchParams } from "next/navigation"
 import { Button } from "@/core/components/ui/button"
 import {
   Select,
@@ -98,7 +98,9 @@ export default function MapPage() {
   const { data: session } = useSession()
   const router = useRouter()
   const params = useParams()
+  const searchParams = useSearchParams()
   const organizationId = params.organizationId as string
+  const vehicleIdFromUrl = searchParams.get("vehicleId")
   
   const [organization, setOrganization] = useState<Organization | null>(null)
   const [vehicles, setVehicles] = useState<Map<string, VehicleData>>(new Map())
@@ -747,6 +749,18 @@ export default function MapPage() {
       fetchAvailableVehicles()
     }
   }, [organization, session?.user?.accessToken, fetchAvailableVehicles])
+
+  // When arriving from dashboard with ?vehicleId=..., pre-select that vehicle
+  useEffect(() => {
+    if (vehicleIdFromUrl && organization?.myRole === "DRIVER" && availableVehicles.length > 0) {
+      const vehicle = availableVehicles.find((v) => v.id === vehicleIdFromUrl)
+      if (vehicle) {
+        driverVehicleRef.current = vehicle
+        setDriverVehicle(vehicle)
+        setSelectedVehicleId(vehicleIdFromUrl)
+      }
+    }
+  }, [vehicleIdFromUrl, organization?.myRole, availableVehicles])
 
   // Reconnect WebSocket when driver selects a vehicle
   useEffect(() => {

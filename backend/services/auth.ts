@@ -21,7 +21,7 @@ export const register = async (req: Request, res: Response) => {
       });
     }
 
-    const { phoneNumber, password, phoneNumberPrefix } = validationResult.data;
+    const {fullName, phoneNumber, password, phoneNumberPrefix } = validationResult.data;
 
     const existingUser = await prisma.user.findUnique({
       where: {
@@ -42,6 +42,7 @@ export const register = async (req: Request, res: Response) => {
 
     await prisma.user.create({
       data: {
+        fullName,
         phoneNumber,
         password: hashedPassword,
         verificationCode,
