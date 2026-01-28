@@ -54,7 +54,7 @@ export const authOptions: NextAuthOptions = {
   },
 
   callbacks: {
-    async jwt({ token, user }) {
+    async jwt({ token, user, trigger, session }) {
       // 1) Initial sign in
       if (user) {
         token.id = user.id;
@@ -64,8 +64,13 @@ export const authOptions: NextAuthOptions = {
         token.accessToken = user.accessToken;
       }
 
-      // 2) On every request, refresh isVerified from database
-      if (token.accessToken) {
+      // 2) Client-triggered update (e.g. after OTP verification on /verification page)
+      if (trigger === "update" && session && typeof session === "object" && "isVerified" in session) {
+        token.isVerified = !!session.isVerified;
+      }
+
+      // 3) On every request, refresh isVerified from backend (when not from client update)
+      if (token.accessToken && trigger !== "update") {
         try {
           const res = await fetch(
             `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/auth/current-user-status`,

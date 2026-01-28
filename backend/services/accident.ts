@@ -41,12 +41,18 @@ export const createAccident = async (req: Request, res: Response) => {
 
 export const getAccidents = async (req: Request, res: Response) => {
     try{
-        const { organizationId, vehicleId, status } = req.query
+        const { organizationId, vehicleId, status, occurredAfter } = req.query
         
         const where: any = {}
         if (organizationId) where.organizationId = organizationId as string
         if (vehicleId) where.vehicleId = vehicleId as string
         if (status) where.status = status as string
+        if (occurredAfter) {
+            const afterDate = new Date(occurredAfter as string)
+            if (!isNaN(afterDate.getTime())) {
+                where.occurredAt = { gte: afterDate }
+            }
+        }
         
         const accidents = await prisma.accident.findMany({
             where,
