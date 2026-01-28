@@ -2132,7 +2132,6 @@ export default function OrganizationDetailPage() {
                                     Invite users to join this organization as ADMIN, DRIVER, or VIEWER
                                 </p>
                             </div>
-                            {organization.myRole === "ADMIN" && (
                                 <Dialog open={inviteDialogOpen} onOpenChange={setInviteDialogOpen}>
                                     <DialogTrigger asChild>
                                         <Button>
@@ -2208,7 +2207,6 @@ export default function OrganizationDetailPage() {
                                         </form>
                                     </DialogContent>
                                 </Dialog>
-                            )}
                         </div>
 
                         {organization.myRole !== "ADMIN" && (

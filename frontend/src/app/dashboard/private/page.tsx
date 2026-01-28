@@ -18,25 +18,12 @@ import {
     Car, 
     AlertTriangle, 
     Map,
-    Activity,
-    Shield,
-    TrendingUp,
-    Clock,
-    CheckCircle2,
-    XCircle,
-    Bell
+    Trash2
 } from "lucide-react"
 import { useSession } from "next-auth/react"
 import { useState, useEffect } from "react"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
-import {
-    Card,
-    CardContent,
-    CardDescription,
-    CardHeader,
-    CardTitle,
-} from "@/core/components/ui/card"
 import {
     Dialog,
     DialogContent,
@@ -44,6 +31,7 @@ import {
     DialogHeader,
     DialogTitle,
     DialogTrigger,
+    DialogFooter,
 } from "@/core/components/ui/dialog"
 
 interface Organization {
@@ -65,6 +53,9 @@ export default function PrivatePage() {
     const [isLoading, setIsLoading] = useState(false)
     const [organizations, setOrganizations] = useState<Organization[]>([])
     const [loadingOrgs, setLoadingOrgs] = useState(true)
+    const [deletingOrgId, setDeletingOrgId] = useState<string | null>(null)
+    const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+    const [orgToDelete, setOrgToDelete] = useState<Organization | null>(null)
     const [formData, setFormData] = useState({
         name: "",
         address: "",
@@ -158,6 +149,39 @@ export default function PrivatePage() {
             )
         } finally {
             setIsLoading(false)
+        }
+    }
+
+    const handleDeleteOrganization = async () => {
+        if (!orgToDelete) return
+        
+        setDeletingOrgId(orgToDelete.id)
+        try {
+            const response = await fetch(
+                `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/organization/${orgToDelete.id}`,
+                {
+                    method: "DELETE",
+                    headers: {
+                        Authorization: session?.user.accessToken || "",
+                    },
+                }
+            )
+            console.log(response)
+
+            if (response.ok) {
+                toast.success("Organization deleted successfully")
+                setDeleteDialogOpen(false)
+                setOrgToDelete(null)
+                fetchOrganizations()
+            } else {
+                const data = await response.json()
+                toast.error(data.message || "Failed to delete organization")
+            }
+        } catch (error) {
+            console.error("Error deleting organization:", error)
+            toast.error("An error occurred while deleting the organization")
+        } finally {
+            setDeletingOrgId(null)
         }
     }
 
@@ -328,17 +352,29 @@ export default function PrivatePage() {
                                         <span>{org.accidents?.length || 0} Accidents</span>
                                     </div>
                                 </div>
-                                <div className="pt-3">
+                                <div className="pt-3 flex gap-2">
                                     <Button
                                         onClick={(e) => {
                                             e.stopPropagation()
                                             router.push(`/dashboard/${org.id}`)
                                         }}
                                         variant="outline"
-                                        className="w-full"
+                                        className="flex-1"
                                     >
                                         <Map className="mr-2 h-4 w-4" />
                                         View Map
+                                    </Button>
+                                    <Button
+                                        onClick={(e) => {
+                                            e.stopPropagation()
+                                            setOrgToDelete(org)
+                                            setDeleteDialogOpen(true)
+                                        }}
+                                        variant="destructive"
+                                        size="icon"
+                                        disabled={deletingOrgId === org.id}
+                                    >
+                                        <Trash2 className="h-4 w-4" />
                                     </Button>
                                 </div>
                             </div>
@@ -346,6 +382,39 @@ export default function PrivatePage() {
                     ))}
                 </div>
             )}
+
+            {/* Delete Confirmation Dialog */}
+            <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+                <DialogContent onClick={(e) => e.stopPropagation()}>
+                    <DialogHeader>
+                        <DialogTitle>Delete Organization</DialogTitle>
+                        <DialogDescription>
+                            Are you sure you want to delete "{orgToDelete?.name}"? This action cannot be undone and will permanently delete all associated data including members, vehicles, and accident records.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <DialogFooter>
+                        <Button
+                            type="button"
+                            variant="outline"
+                            onClick={() => {
+                                setDeleteDialogOpen(false)
+                                setOrgToDelete(null)
+                            }}
+                            disabled={deletingOrgId !== null}
+                        >
+                            Cancel
+                        </Button>
+                        <Button
+                            type="button"
+                            variant="destructive"
+                            onClick={handleDeleteOrganization}
+                            disabled={deletingOrgId !== null}
+                        >
+                            {deletingOrgId ? "Deleting..." : "Delete Organization"}
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
         </div>
     )
 }
