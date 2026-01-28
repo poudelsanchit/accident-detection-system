@@ -11,6 +11,8 @@ import { WebSocket, WebSocketServer } from "ws"
 import { prisma } from "./config/prismaClient"
 import { sendAccidentAlert } from "./config/twilio"
 
+const FASTAPI_URL = process.env.FASTAPI_URL || "http://localhost:8000"
+
 const app = express()
 
 app.use(cors())
@@ -170,6 +172,56 @@ async function sendAccidentSMSAlerts(
     console.log(`✅ SMS sent: ${successful} successful, ${failed} failed`)
   } catch (error) {
     console.error("❌ Error sending SMS alerts:", error)
+  }
+}
+
+/* ===================== ML MODEL PREDICTION ===================== */
+
+/**
+ * Call FastAPI XGBoost model to predict accident probability
+ */
+async function predictAccidentWithML(
+  accelX: number,
+  accelY: number,
+  accelZ: number,
+  gyroX: number,
+  gyroY: number,
+  gyroZ: number
+): Promise<{ prediction: number; probability: number; confidence: string } | null> {
+  try {
+    const response = await fetch(`${FASTAPI_URL}/predict`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        accelX,
+        accelY,
+        accelZ,
+        gyroX,
+        gyroY,
+        gyroZ,
+      }),
+    })
+
+    if (!response.ok) {
+      console.error(`❌ FastAPI prediction failed: ${response.status} ${response.statusText}`)
+      return null
+    }
+
+    const result = await response.json() as {
+      prediction: number
+      probability: number
+      confidence: string
+    }
+    return {
+      prediction: result.prediction,
+      probability: result.probability,
+      confidence: result.confidence,
+    }
+  } catch (error) {
+    console.error("❌ Error calling FastAPI prediction:", error)
+    return null
   }
 }
 
@@ -340,7 +392,7 @@ wss.on("connection", (ws) => {
         gValue >= t.g || gyroValue >= t.gyro
       
       if (!thresholdExceeded) {
-        console.log(`✅ NO ACCIDENT, latitude: ${latitude} and longitude: ${longitude}`)
+        console.log(`✅ NO ACCIDENT (threshold not exceeded), latitude: ${latitude} and longitude: ${longitude}`)
         return
       }
       
@@ -350,20 +402,43 @@ wss.on("connection", (ws) => {
         return // Still in cooldown period
       }
       
-      if (thresholdExceeded) {
+      // Threshold exceeded - call ML model for prediction
+      console.log("⚠️ Threshold exceeded, calling ML model for prediction...")
+      // const mlPrediction = await predictAccidentWithML(
+      //   accelX,
+      //   accelY,
+      //   accelZ,
+      //   gyroX,
+      //   gyroY,
+      //   gyroZ
+      // )
 
-        // Determine which threshold(s) were exceeded (cause of accident)
-        const causes = []
-        if (gValue >= t.g) causes.push(`G-Force: ${gValue.toFixed(2)}g (threshold: ${t.g}g)`)
-        if (gyroValue >= t.gyro) causes.push(`Gyroscope: ${gyroValue.toFixed(2)} deg/s (threshold: ${t.gyro})`)
+      // Only create accident if ML model predicts accident (prediction === 1)
+      // if (!mlPrediction) {
+      //   console.log("⚠️ ML model unavailable, falling back to threshold-based detection")
+      //   // Fallback: proceed with threshold-based detection if ML service is down
+      // } else if (mlPrediction.prediction === 0) {
+      //   console.log(`✅ NO ACCIDENT (ML model prediction: ${mlPrediction.prediction}, probability: ${mlPrediction.probability.toFixed(4)}, confidence: ${mlPrediction.confidence})`)
+      //   return // ML model says no accident, skip creating accident record
+      // }
 
-        console.log("🚨 ACCIDENT - Cause:", causes.join(", "))
-        console.log("gValue: " + gValue.toFixed(2))
-        // Update last accident time
-        lastAccidentTime[vehicleId] = now
+      // ML model confirmed accident (prediction === 1) or ML service unavailable (fallback)
+      const causes = []
+      if (gValue >= t.g) causes.push(`G-Force: ${gValue.toFixed(2)}g (threshold: ${t.g}g)`)
+      if (gyroValue >= t.gyro) causes.push(`Gyroscope: ${gyroValue.toFixed(2)} deg/s (threshold: ${t.gyro})`)
 
-        // Create accident record in database
-        try {
+      console.log("🚨 ACCIDENT DETECTED")
+      console.log("   Cause:", causes.join(", "))
+      console.log("   gValue:", gValue.toFixed(2))
+      // if (mlPrediction) {
+      //   console.log(`   ML Prediction: ${mlPrediction.prediction}, Probability: ${mlPrediction.probability.toFixed(4)}, Confidence: ${mlPrediction.confidence}`)
+      // }
+      
+      // Update last accident time
+      lastAccidentTime[vehicleId] = now
+
+      // Create accident record in database
+      try {
           const accident = await createAccidentRecord(
             parsedData.organizationId,
             vehicleId,
@@ -377,7 +452,7 @@ wss.on("connection", (ws) => {
             gyroValue,
             now
           )
-
+          
           // Send SMS alerts to organization members (excluding driver)
           await sendAccidentSMSAlerts(
             parsedData.organizationId,
@@ -402,6 +477,11 @@ wss.on("connection", (ws) => {
               gyroValue: Number(gyroValue.toFixed(2)),
               accidentId: accident.id,
               timestamp: now,
+              // mlPrediction: mlPrediction ? {
+              //   prediction: mlPrediction.prediction,
+              //   probability: mlPrediction.probability,
+              //   confidence: mlPrediction.confidence,
+              // } : null,
             },
           }
 
@@ -434,6 +514,11 @@ wss.on("connection", (ws) => {
               gValue: Number(gValue.toFixed(2)),
               gyroValue: Number(gyroValue.toFixed(2)),
               timestamp: now,
+              // mlPrediction: mlPrediction ? {
+              //   prediction: mlPrediction.prediction,
+              //   probability: mlPrediction.probability,
+              //   confidence: mlPrediction.confidence,
+              // } : null,
             },
           }
 
@@ -450,10 +535,8 @@ wss.on("connection", (ws) => {
             }
           })
         }
-
       }
-    }
-  })
+    })
 
   ws.on("close", () => {
     viewers = viewers.filter(v => v.ws !== ws)
