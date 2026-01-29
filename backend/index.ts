@@ -35,7 +35,6 @@ const httpServer = app.listen(3000, () => {
 
 const wss = new WebSocketServer({ server: httpServer })
 
-/* ===================== ENUMS ===================== */
 
 enum UserRole {
   DRIVER = "DRIVER",
@@ -51,7 +50,6 @@ enum VehicleType {
   OTHER = "OTHER",
 }
 
-/* ===================== INTERFACES ===================== */
 
 interface Viewer {
   organizationId: string
@@ -67,7 +65,6 @@ interface Driver {
   name: string
 }
 
-/* ===================== STATE ===================== */
 
 let viewers: Viewer[] = []
 let drivers: Driver[] = []
@@ -80,22 +77,18 @@ const gpsHistory: Record<
 const lastAccidentTime: Record<string, number> = {}
 const ACCIDENT_COOLDOWN = 10_000
 
-/* ===================== ACCIDENT CONFIG ===================== */
 
-/* ===================== THRESHOLDS ===================== */
 
 const THRESHOLDS: Record<
   VehicleType,
   { g: number; gyro: number }
 > = {
-  MOTORCYCLE: { g: 0.1, gyro: 200 },
-  CAR: { g: 0.1, gyro: 250 },
+  MOTORCYCLE: { g: 3, gyro: 200 },
+  CAR: { g: 4, gyro: 250 },
   TRUCK: { g: 6.5, gyro: 350 },
-  BUS: { g: 6.5, gyro: 350 },
+  BUS: { g: 5, gyro: 350 },
   OTHER: { g: 4.5, gyro: 275 },
 }
-
-/* ===================== HELPERS ===================== */
 
 function haversineDistance(
   lat1: number,
@@ -122,9 +115,6 @@ function isValidVehicleType(value: any): value is VehicleType {
   return Object.values(VehicleType).includes(value)
 }
 
-/**
- * Send SMS alerts to all organization members except the driver
- */
 async function sendAccidentSMSAlerts(
   organizationId: string,
   driverId: string,
@@ -152,15 +142,14 @@ async function sendAccidentSMSAlerts(
     })
 
     if (members.length === 0) {
-      console.log("⚠️ No members to notify (excluding driver)")
+      console.log(" No members to notify (excluding driver)")
       return
     }
 
     // Prepare SMS message
     const locationUrl = `https://www.google.com/maps?q=${latitude},${longitude}`
-    const messageBody = `🚨 ACCIDENT ALERT!\n\nDriver: ${driverName}\nVehicle: ${vehicleNumber} (${vehicleType})\nLocation: ${locationUrl}\n\nPlease respond immediately.`
+    const messageBody = `ACCIDENT ALERT!\n\nDriver: ${driverName}\nVehicle: ${vehicleNumber} (${vehicleType})\nLocation: ${locationUrl}\n\nPlease respond immediately.`
 
-    console.log(`📤 Sending SMS to ${members.length} member(s)...`)
 
     // Send SMS to all members (excluding driver)
     const smsPromises = members.map(member => 
@@ -173,17 +162,11 @@ async function sendAccidentSMSAlerts(
     const successful = results.filter(r => r.status === 'fulfilled' && r.value.success).length
     const failed = results.length - successful
     
-    console.log(`✅ SMS sent: ${successful} successful, ${failed} failed`)
   } catch (error) {
     console.error("❌ Error sending SMS alerts:", error)
   }
 }
 
-/* ===================== ML MODEL PREDICTION ===================== */
-
-/**
- * Call FastAPI XGBoost model to predict accident probability
- */
 async function predictAccidentWithML(
   accelX: number,
   accelY: number,
@@ -209,7 +192,7 @@ async function predictAccidentWithML(
     })
 
     if (!response.ok) {
-      console.error(`❌ FastAPI prediction failed: ${response.status} ${response.statusText}`)
+      console.error(` FastAPI prediction failed: ${response.status} ${response.statusText}`)
       return null
     }
 
@@ -224,16 +207,11 @@ async function predictAccidentWithML(
       confidence: result.confidence,
     }
   } catch (error) {
-    console.error("❌ Error calling FastAPI prediction:", error)
+    console.error("Error calling FastAPI prediction:", error)
     return null
   }
 }
 
-/* ===================== ACCIDENT CREATION ===================== */
-
-/**
- * Create accident record in database
- */
 async function createAccidentRecord(
   organizationId: string,
   vehicleId: string,
@@ -271,7 +249,6 @@ async function createAccidentRecord(
   }
 }
 
-/* ===================== WEBSOCKET ===================== */
 
 wss.on("connection", (ws) => {
   ws.on("error", console.error)
@@ -316,20 +293,8 @@ wss.on("connection", (ws) => {
         vehicleType,
         driverName,
       } = parsedData.data
-      // // Log received driver data
-      // console.log("📥 Received driver data:", {
-      //   vehicleId,
-      //   driverName,
-      //   vehicleType,
-      //   location: { latitude, longitude },
-      //   sensors: {
-      //     acceleration: { x: accelX, y: accelY, z: accelZ },
-      //     gyroscope: { x: gyroX, y: gyroY, z: gyroZ },
-      //   },
-      //   timestamp: new Date().toISOString(),
-      // })
+ 
 
-      /* ---- forward live data to viewers ---- */
       viewers.forEach((viewer) => {
         if (viewer.organizationId === parsedData.organizationId) {
           viewer.ws.send(JSON.stringify({
@@ -341,7 +306,6 @@ wss.on("connection", (ws) => {
 
       const now = Date.now()
 
-      /* ================= GPS → SPEED ================= */
 
       let speedKmh = 0
 
@@ -367,7 +331,6 @@ wss.on("connection", (ws) => {
         speed: speedKmh,
       }
 
-      /* ================= MPU ================= */
 
       const accelMagnitude = Math.sqrt(
         accelX ** 2 + accelY ** 2 + accelZ ** 2
@@ -384,14 +347,7 @@ wss.on("connection", (ws) => {
         : VehicleType.OTHER
       const t = THRESHOLDS[validVehicleType]
 
-      /* ================= COOLDOWN ================= */
 
-      // lastAccidentTime[vehicleId] ??= 0
-      // if (now - lastAccidentTime[vehicleId] < ACCIDENT_COOLDOWN) return
-
-      /* ================= ACCIDENT LOGIC ================= */
-      
-      // Check if threshold-based detection triggers
       const thresholdExceeded = 
         gValue >= t.g || gyroValue >= t.gyro
       
@@ -400,14 +356,13 @@ wss.on("connection", (ws) => {
         return
       }
       
-      // Check cooldown to prevent spam
       lastAccidentTime[vehicleId] ??= 0
       if (now - lastAccidentTime[vehicleId] < ACCIDENT_COOLDOWN) {
         return // Still in cooldown period
       }
       
       // Threshold exceeded - call ML model for prediction
-      console.log("⚠️ Threshold exceeded, calling ML model for prediction...")
+      console.log("Threshold exceeded, calling ML model for prediction...")
       const mlPrediction = await predictAccidentWithML(
         accelX,
         accelY,
@@ -419,26 +374,22 @@ wss.on("connection", (ws) => {
 
       // Only create accident if ML model predicts accident (prediction === 1)
       if (!mlPrediction) {
-        console.log("⚠️ ML model unavailable, falling back to threshold-based detection")
+        console.log(" ML model unavailable, falling back to threshold-based detection")
         // Fallback: proceed with threshold-based detection if ML service is down
       } else if (mlPrediction.prediction === 0) {
-        console.log(`✅ NO ACCIDENT (ML model prediction: ${mlPrediction.prediction}, probability: ${mlPrediction.probability.toFixed(4)}, confidence: ${mlPrediction.confidence})`)
+        console.log(`NO ACCIDENT (ML model prediction: ${mlPrediction.prediction}, probability: ${mlPrediction.probability.toFixed(4)}, confidence: ${mlPrediction.confidence})`)
         return // ML model says no accident, skip creating accident record
       }
 
-      // ML model confirmed accident (prediction === 1) or ML service unavailable (fallback)
       const causes = []
       if (gValue >= t.g) causes.push(`G-Force: ${gValue.toFixed(2)}g (threshold: ${t.g}g)`)
       if (gyroValue >= t.gyro) causes.push(`Gyroscope: ${gyroValue.toFixed(2)} deg/s (threshold: ${t.gyro})`)
 
-      console.log("🚨 ACCIDENT DETECTED")
+      console.log("ACCIDENT DETECTED")
       console.log("   Cause:", causes.join(", "))
       console.log("   gValue:", gValue.toFixed(2))
-      // if (mlPrediction) {
-      //   console.log(`   ML Prediction: ${mlPrediction.prediction}, Probability: ${mlPrediction.probability.toFixed(4)}, Confidence: ${mlPrediction.confidence}`)
-      // }
       
-      // Update last accident time
+      
       lastAccidentTime[vehicleId] = now
 
       // Create accident record in database
@@ -457,7 +408,6 @@ wss.on("connection", (ws) => {
             now
           )
           
-          // Send SMS alerts to organization members (excluding driver)
           await sendAccidentSMSAlerts(
             parsedData.organizationId,
             accident.vehicle.driverId,
@@ -489,23 +439,19 @@ wss.on("connection", (ws) => {
             },
           }
 
-          // Send accident alert to all viewers in the organization
           viewers.forEach((viewer) => {
             if (viewer.organizationId === parsedData.organizationId) {
               viewer.ws.send(JSON.stringify(payload))
             }
           })
           
-          // Send accident alert to all drivers in the organization (including the driver involved)
           drivers.forEach((driver) => {
             if (driver.organizationId === parsedData.organizationId) {
               driver.ws.send(JSON.stringify(payload))
             }
           })
         } catch (error) {
-          console.error("❌ ACCIDENT - Failed to create record:", error)
           
-          // Still send alert even if database write fails
           const payload = {
             type: "accident:detected",
             data: {
