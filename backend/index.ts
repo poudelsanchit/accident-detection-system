@@ -408,23 +408,23 @@ wss.on("connection", (ws) => {
       
       // Threshold exceeded - call ML model for prediction
       console.log("⚠️ Threshold exceeded, calling ML model for prediction...")
-      // const mlPrediction = await predictAccidentWithML(
-      //   accelX,
-      //   accelY,
-      //   accelZ,
-      //   gyroX,
-      //   gyroY,
-      //   gyroZ
-      // )
+      const mlPrediction = await predictAccidentWithML(
+        accelX,
+        accelY,
+        accelZ,
+        gyroX,
+        gyroY,
+        gyroZ
+      )
 
       // Only create accident if ML model predicts accident (prediction === 1)
-      // if (!mlPrediction) {
-      //   console.log("⚠️ ML model unavailable, falling back to threshold-based detection")
-      //   // Fallback: proceed with threshold-based detection if ML service is down
-      // } else if (mlPrediction.prediction === 0) {
-      //   console.log(`✅ NO ACCIDENT (ML model prediction: ${mlPrediction.prediction}, probability: ${mlPrediction.probability.toFixed(4)}, confidence: ${mlPrediction.confidence})`)
-      //   return // ML model says no accident, skip creating accident record
-      // }
+      if (!mlPrediction) {
+        console.log("⚠️ ML model unavailable, falling back to threshold-based detection")
+        // Fallback: proceed with threshold-based detection if ML service is down
+      } else if (mlPrediction.prediction === 0) {
+        console.log(`✅ NO ACCIDENT (ML model prediction: ${mlPrediction.prediction}, probability: ${mlPrediction.probability.toFixed(4)}, confidence: ${mlPrediction.confidence})`)
+        return // ML model says no accident, skip creating accident record
+      }
 
       // ML model confirmed accident (prediction === 1) or ML service unavailable (fallback)
       const causes = []
@@ -481,11 +481,11 @@ wss.on("connection", (ws) => {
               gyroValue: Number(gyroValue.toFixed(2)),
               accidentId: accident.id,
               timestamp: now,
-              // mlPrediction: mlPrediction ? {
-              //   prediction: mlPrediction.prediction,
-              //   probability: mlPrediction.probability,
-              //   confidence: mlPrediction.confidence,
-              // } : null,
+              mlPrediction: mlPrediction ? {
+                prediction: mlPrediction.prediction,
+                probability: mlPrediction.probability,
+                confidence: mlPrediction.confidence,
+              } : null,
             },
           }
 
@@ -518,11 +518,11 @@ wss.on("connection", (ws) => {
               gValue: Number(gValue.toFixed(2)),
               gyroValue: Number(gyroValue.toFixed(2)),
               timestamp: now,
-              // mlPrediction: mlPrediction ? {
-              //   prediction: mlPrediction.prediction,
-              //   probability: mlPrediction.probability,
-              //   confidence: mlPrediction.confidence,
-              // } : null,
+              mlPrediction: mlPrediction ? {
+                prediction: mlPrediction.prediction,
+                probability: mlPrediction.probability,
+                confidence: mlPrediction.confidence,
+              } : null,
             },
           }
 
