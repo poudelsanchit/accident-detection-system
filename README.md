@@ -31,7 +31,6 @@ This system consists of three main components:
 ### FastAPI Microservice
 - FastAPI
 - XGBoost for accident prediction
-- LSTM model for time-series analysis
 - NumPy & scikit-learn
 
 ## Prerequisites
@@ -152,7 +151,6 @@ pip install -r requirements.txt
 #### Step 4: Verify ML models
 Ensure the following model files exist in the directory:
 - `xgboost_accident_model.pkl`
-- `accident_lstm.pt`
 
 #### Step 5: Start the FastAPI server
 ```bash
@@ -364,7 +362,7 @@ pip install -r requirements.txt --force-reinstall
 ```
 
 **Model file not found**
-- Ensure `xgboost_accident_model.pkl` and `accident_lstm.pt` exist
+- Ensure `xgboost_accident_model.pkl`
 - Check file paths in `main.py`
 
 ---
